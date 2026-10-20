@@ -1,14 +1,17 @@
+import { ROOM_IDLE_MS,ROOM_ACTIVITY_SQL,DELETE_EXPIRED_ROOMS_SQL } from './room-lifecycle.ts';
 import { ANALYSIS_POLICY,validateAnalysis } from './word-analysis.ts';
 import type { Game } from './game.ts';
 import type { RoomStore } from './rooms.ts';
 export type SqlRow=Record<string,unknown>;
 export type SqlExecute=(query:string,parameters:unknown[])=>Promise<SqlRow[]>;
 const CACHE_VERSION='written-thai-v1';
-export function createSqlStore(execute:SqlExecute):RoomStore {
+export function createSqlStore(execute:SqlExecute,clock=()=>Date.now()):RoomStore {
   return {
-    async read(code){const [row]=await execute('SELECT data, revision FROM rooms WHERE code = ?',[code]);return row?{game:JSON.parse(String(row.data)) as Game,revision:Number(row.revision)}:null;},
-    async insert(game){const rows=await execute('INSERT INTO rooms (code,data,revision,updated_at) VALUES (?,?,0,?) ON CONFLICT (code) DO NOTHING RETURNING code',[game.code,JSON.stringify(game),Date.now()]);return rows.length===1;},
-    async write(code,revision,game){const rows=await execute('UPDATE rooms SET data = ?, revision = revision + 1, updated_at = ? WHERE code = ? AND revision = ? RETURNING code',[JSON.stringify(game),Date.now(),code,revision]);return rows.length===1;},
+    async read(code){const [row]=await execute(`SELECT data, revision FROM rooms WHERE code = ? AND ${ROOM_ACTIVITY_SQL} > ?`,[code,clock()-ROOM_IDLE_MS]);return row?{game:JSON.parse(String(row.data)) as Game,revision:Number(row.revision)}:null;},
+    async insert(game){const rows=await execute('INSERT INTO rooms (code,data,revision,updated_at,last_active_at) VALUES (?,?,0,?,?) ON CONFLICT (code) DO NOTHING RETURNING code',[game.code,JSON.stringify(game),clock(),clock()]);return rows.length===1;},
+    async write(code,revision,game){const rows=await execute(`UPDATE rooms SET data = ?, revision = revision + 1, updated_at = ? WHERE code = ? AND revision = ? AND ${ROOM_ACTIVITY_SQL} > ? RETURNING code`,[JSON.stringify(game),clock(),code,revision,clock()-ROOM_IDLE_MS]);return rows.length===1;},
+    async touch(code,now){const rows=await execute(`UPDATE rooms SET last_active_at = ? WHERE code = ? AND ${ROOM_ACTIVITY_SQL} > ? RETURNING code`,[now,code,now-ROOM_IDLE_MS]);return rows.length===1;},
+    async pruneExpired(now){return (await execute(DELETE_EXPIRED_ROOMS_SQL,[now-ROOM_IDLE_MS])).length;},
     async analyses(model,words){
       if(!words.length)return {};
       const rows=await execute(`SELECT word,analysis FROM word_analysis_cache WHERE policy = ? AND model = ? AND word IN (${words.map(()=>'?').join(',')})`,[ANALYSIS_POLICY,model,...words]);

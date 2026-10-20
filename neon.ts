@@ -1,8 +1,13 @@
 import { defineConfig } from "@neon/config/v1";
 
 export default defineConfig({
-  // Declare your Neon services here
-  // Postgres only: preserve existing identity providers and other services.
+  // Scheduled expiry runs independently of the Vercel frontend.
+  functions: {
+    roomcleanup: {name: 'Expire inactive game rooms',source: './functions/roomcleanup.ts'},
+  },
+  triggers: {
+    'expired-rooms': {type: 'schedule',function: 'roomcleanup',cron: '*/15 * * * *'},
+  },
   // Branch policy: per-branch tuning
   branch: (branch) => {
     if (branch.isDefault) {

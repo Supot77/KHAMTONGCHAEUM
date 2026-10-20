@@ -8,6 +8,8 @@ class MemoryStore{
   async read(code){const row=this.rows.get(code);return row?structuredClone(row):null;}
   async insert(game){if(this.rows.has(game.code))return false;this.rows.set(game.code,{game:structuredClone(game),revision:0});return true;}
   async write(code,revision,game){if(this.rows.get(code)?.revision!==revision)return false;this.rows.set(code,{game:structuredClone(game),revision:revision+1});return true;}
+  async touch(code){return this.rows.has(code);}
+  async pruneExpired(){return 0;}
   async analyses(model,words){return Object.fromEntries(words.filter(w=>this.facts[w]).map(w=>[w,this.facts[w].analysis]));}
   async saveAnalyses(model,entries,source='model'){for(const [word,analysis] of Object.entries(entries)){if(this.facts[word]?.source==='players'&&source==='model')continue;this.facts[word]={analysis:structuredClone(analysis),source};this.writes++;}}
   async cached(model,words){return Object.fromEntries(words.filter(w=>this.words[w]).map(w=>[w,this.words[w]]));}

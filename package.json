@@ -10,13 +10,14 @@
     "dev": "next dev --port 5173",
     "build": "next build",
     "start": "next start --port 5173",
-    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs",
+    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs tests/expiry.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:setup": "node scripts/setup-db.mjs"
   },
   "dependencies": {
     "@neon/config": "^1.9.2",
     "@neon/env": "^1.6.3",
+    "@neon/functions": "^0.11.0",
     "@vercel/functions": "^3.10.1",
     "lucide-react": "^1.31.0",
     "next": "16.3.4",

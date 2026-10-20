@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS rooms (
   code TEXT PRIMARY KEY,
   data TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 0,
-  updated_at BIGINT NOT NULL
+  updated_at BIGINT NOT NULL,
+  last_active_at BIGINT NOT NULL DEFAULT 0
 );
 -- statement-breakpoint
 CREATE TABLE IF NOT EXISTS syllable_cache (
@@ -23,3 +24,6 @@ CREATE TABLE IF NOT EXISTS word_analysis_cache (
   updated_at BIGINT NOT NULL,
   PRIMARY KEY (policy, model, word)
 );
+
+-- statement-breakpoint
+CREATE INDEX IF NOT EXISTS rooms_idle_activity_idx ON rooms (COALESCE(NULLIF(last_active_at,0),updated_at));

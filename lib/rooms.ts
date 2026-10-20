@@ -1,3 +1,4 @@
+import { RoomUnavailableError } from './room-lifecycle.ts';
 import { advanceChallenge,openChallenge,debate,castVote,resolveChallenge } from './challenge.ts';
 import { validateAnalysis } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
@@ -10,6 +11,8 @@ export interface RoomStore {
   read(code:string):Promise<{game:Game;revision:number}|null>;
   insert(game:Game):Promise<boolean>;
   write(code:string,revision:number,game:Game):Promise<boolean>;
+  touch(code:string,now:number):Promise<boolean>;
+  pruneExpired(now:number):Promise<number>;
   analyses(model:string,words:string[]):Promise<Record<string,WordAnalysis>>;
   saveAnalyses(model:string,entries:Record<string,WordAnalysis>,source?:'model'|'players'):Promise<void>;
   cached(model:string,words:string[]):Promise<Record<string,string[]>>;
@@ -26,7 +29,7 @@ export class RoomService {
   constructor(store:RoomStore,provider:LanguageProvider,clock=()=>Date.now()){this.store=store;this.provider=provider;this.clock=clock;}
   async mutate<T>(code:string,fn:(game:Game)=>T):Promise<{value:T;game:Game;revision:number}> {
     for(let attempt=0;attempt<10;attempt++){
-      const row=await this.store.read(code);if(!row)throw new Error('ไม่พบห้องนี้ ตรวจรหัสห้องอีกครั้ง');
+      const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
       const value=fn(row.game);
       if(await this.store.write(code,row.revision,row.game))return {value,game:row.game,revision:row.revision+1};
     }
@@ -34,7 +37,7 @@ export class RoomService {
   }
   async command(command:Command) {
     const hash=await tokenHash(command.token);const now=this.clock();
-    if(!['create','join','read','submit','pass','start','retry','end','reject','accept','appeal','lobby','review','confirmReview','challenge','debate','vote'].includes(command.action))throw new Error('คำสั่งไม่ถูกต้อง');
+    if(!['create','join','read','heartbeat','submit','pass','start','retry','end','reject','accept','appeal','lobby','review','confirmReview','challenge','debate','vote'].includes(command.action))throw new Error('คำสั่งไม่ถูกต้อง');
     if(command.action==='create') {
       const names=command.mode==='shared'&&Array.isArray(command.names)?command.names:[command.name];
       if(names.some(n=>typeof n!=='string'))throw new Error('กรุณาใส่ชื่อผู้เล่น');
@@ -46,9 +49,10 @@ export class RoomService {
       throw new Error('สร้างรหัสห้องไม่ได้ กรุณาลองอีกครั้ง');
     }
     const code=String(command.code??'').toUpperCase();if(!/^[A-Z2-9]{6}$/.test(code))throw new Error('รหัสห้องต้องมี 6 ตัว');
-    if(command.action==='read'){
-      let row=await this.store.read(code);if(!row)throw new Error('ไม่พบห้องนี้ ตรวจรหัสห้องอีกครั้ง');
+    if(command.action==='read'||command.action==='heartbeat'){
+      let row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
       const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้ กรุณาเข้าห้องอีกครั้ง');
+      if(command.action==='heartbeat'&&!await this.store.touch(code,now))throw new RoomUnavailableError();
       if(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline))){const updated=await this.mutate(code,g=>{advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
       return publicGame(row.game,row.revision,player.id,now);
     }
@@ -111,13 +115,14 @@ export class RoomService {
       }
       game.processed=[...game.processed,command.commandId!].slice(-300);return player.id;
     });
+    if(!await this.store.touch(code,now))throw new RoomUnavailableError();
     return publicGame(updated.game,updated.revision,updated.value,now);
   }
   async check(code:string,token:string) {
     const hash=await tokenHash(token);const now=this.clock();
     let job:{id:string;roundId:string;seed:boolean;words:{id:string;text:string}[];judgeId?:string}|undefined;
     // No read-only busy request writes to the database. Claim only after finding actual work.
-    const existing=await this.store.read(code);if(!existing)throw new Error('ไม่พบห้องนี้');
+    const existing=await this.store.read(code);if(!existing)throw new RoomUnavailableError();
     if(!existing.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
     const ready=(g:Game)=>this.provider.configured&&g.nextCheckAt<=now&&(!g.lease||g.lease.until<=now)&&((g.status==='playing'&&g.challenge?.phase==='judging')||(!g.manual&&(g.status==='starting'||(['playing','ended'].includes(g.status)&&roundWords(g).some(needsAnalysis)))));
     if(!ready(existing.game))return {checked:false};

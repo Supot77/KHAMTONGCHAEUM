@@ -9,6 +9,12 @@ const statements=readFileSync(new URL('../database/schema.sql',import.meta.url),
 await client.connect();
 try{
   await client.query('BEGIN');
-  for(const statement of statements)await client.query(statement);
+  for(let index=0;index<statements.length;index++){
+    await client.query(statements[index]);
+    if(index===0){
+      await client.query('ALTER TABLE rooms ADD COLUMN IF NOT EXISTS last_active_at BIGINT NOT NULL DEFAULT 0');
+      await client.query('UPDATE rooms SET last_active_at = updated_at WHERE last_active_at = 0');
+    }
+  }
   await client.query('COMMIT');console.log('Database schema is ready.');
 }catch(error){await client.query('ROLLBACK');throw error;}finally{await client.end();}
