@@ -1,20 +1,2 @@
-import assert from 'node:assert/strict';
-const base=process.env.GAME_TEST_URL||'http://127.0.0.1:5173';
-const status=await (await fetch(base+'/api/status')).json();if(process.argv.includes('--require-neon'))assert.equal(status.storage,'neon');
-const host=crypto.randomUUID()+crypto.randomUUID(),guest=crypto.randomUUID()+crypto.randomUUID();let code;
-async function command(token,action,data={}){const response=await fetch(base+'/api/room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,code,token,commandId:crypto.randomUUID(),...data})});const value=await response.json();return {status:response.status,value};}
-let r=await command(host,'create',{mode:'online',name:'ทดสอบโฮสต์ Neon',seconds:0});assert.equal(r.status,200);code=r.value.code;
-r=await command(guest,'join',{name:'ทดสอบเพื่อน Neon'});assert.equal(r.status,200);assert.equal(r.value.players.length,2);
-r=await command(guest,'start',{manual:true,text:'ทะเล'});assert.equal(r.status,400);
-r=await command(host,'start',{manual:true,text:'ทะเล'});assert.equal(r.status,200);
-let turn=r.value.turnNumber;
-r=await command(guest,'submit',{text:'ปลา',turn});assert.equal(r.status,400);
-r=await command(host,'submit',{text:'ปลา',turn});assert.equal(r.status,200);const fishId=r.value.chain.at(-1).id;turn=r.value.turnNumber;
-r=await command(guest,'read');assert.equal(r.value.chain.at(-1).text,'ปลา');
-r=await command(guest,'submit',{text:'แมว',turn});assert.equal(r.status,200);
-r=await command(host,'reject',{wordId:fishId});assert.equal(r.status,200);assert.deepEqual(r.value.chain.map(w=>w.text),['ทะเล']);assert.deepEqual(r.value.events.at(-1).reusable.map(w=>w.text),['แมว']);
-r=await command(guest,'read');assert.equal(r.value.chain.length,1);assert.equal(r.value.events.at(-1).word,'ปลา');
-r=await command(host,'submit',{text:'แมว',turn:r.value.turnNumber});assert.equal(r.status,200);assert.equal(r.value.chain.at(-1).text,'แมว');
-r=await command(host,'accept',{wordId:r.value.chain.at(-1).id});assert.equal(r.status,200);assert.equal(r.value.players[0].score,1);
-r=await command(host,'end');assert.equal(r.value.status,'ended');
-console.log(JSON.stringify({backend:status.storage,mode:'online',players:r.value.players.length,authorization:'PASS',sharedState:'PASS',rollback:'PASS',reuse:'PASS',score:'PASS',roomEnded:true,result:'PASS'}));
+// Full online proof now includes elimination, challenges and five sets.
+import './smoke-competition.mjs';

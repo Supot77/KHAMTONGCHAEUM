@@ -11,15 +11,17 @@ async function check(){const response=await fetch(base+'/api/check',{method:'POS
 let r=await room('create',{mode:'shared',names:['ทดสอบ เอ','ทดสอบ บี','ทดสอบ ซี'],seconds:30});code=r.code;
 await room('start');const seedCheck=await check();r=await room('read');
 assert.equal(r.status,'playing',JSON.stringify(seedCheck));assert.equal(r.chain[0].syllables.join(''),r.chain[0].text);
+const seed=r.chain[0].text;
 const pairs=[['ปลา','ปลาดาว'],['นก','นกแก้ว'],['แมว','แมวน้ำ']];
 const [first,duplicate]=pairs.find(([word])=>!r.chain[0].syllables.includes(word));
 for(const word of [first,duplicate,'ท้องฟ้า','เมฆ'])r=await room('submit',{text:word,turn:r.turnNumber});
-assert.equal(r.chain.length,5);assert.equal(r.pending,4);assert.ok(r.deadline>r.serverNow);
+assert.equal(r.wordCount,4);assert.equal(r.pending,4);assert.ok(r.deadline>r.serverNow);
 console.log(JSON.stringify({phase:'before check',words:r.chain.map(w=>w.text),pending:r.pending,turn:r.players[r.turnIndex].name}));
 const result=await check();r=await room('read');
 if(result.error)throw new Error(result.error);
-assert.equal(r.chain.length,2);assert.equal(r.events.at(-1).word,duplicate);assert.equal(r.events.at(-1).previous,first);
+assert.equal(r.wordCount,1);assert.equal(r.status,'ended');assert.equal(r.events.at(-1).word,duplicate);assert.equal(r.events.at(-1).previous,first);
 assert.deepEqual(r.events.at(-1).reusable.map(w=>w.text),['ท้องฟ้า','เมฆ']);assert.equal(r.turnIndex,1);
-const replay=await room('submit',{text:'ท้องฟ้า',turn:r.turnNumber});assert.equal(replay.chain.at(-1).text,'ท้องฟ้า');
-await room('end');
-console.log(JSON.stringify({phase:'after check',seed:r.chain[0].text,chain:r.chain.map(w=>w.text),culprit:r.events.at(-1).playerName,repeated:r.events.at(-1).syllables,reusable:r.events.at(-1).reusable.map(w=>w.text),replay:'accepted',result:'PASS'}));
+assert.ok(r.reviewWords.some(w=>w.text==='ท้องฟ้า'));
+const survivors=r.competition.activeIds.length;
+
+console.log(JSON.stringify({phase:'after check',seed,chain:r.chain.map(w=>w.text),culprit:r.events.at(-1).playerName,repeated:r.events.at(-1).syllables,reusable:r.events.at(-1).reusable.map(w=>w.text),survivors,elimination:'PASS',summary:'PASS',result:'PASS'}));

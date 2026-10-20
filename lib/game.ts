@@ -1,8 +1,17 @@
+import { prepareCompetition,eliminate,nextActiveIndex,activeIds } from './competition.ts';
+import type { Competition } from './competition.ts';
+import type { Challenge } from './challenge.ts';
+import { validateAnalysis, nounDecision } from './word-analysis.ts';
+import type { WordAnalysis } from './word-analysis.ts';
 export type Mode = 'shared' | 'online';
 export type Player = { id: string; name: string; tokenHash: string };
-export type Word = { id: string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error'; manual?: boolean; at: number };
-export type ResetEvent = { id: string; at: number; reason: 'duplicate' | 'human'; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
+export type Word = { id: string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; manual?: boolean; at: number };
+export type ResetEvent = { id: string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
+export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; approvedId?:string};
+export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge';at:number};
 export type Game = {
+  competition?:Competition; challenge?:Challenge|null; archiveWords?:Word[];
+  roundNumber?:number; result?:RoundResult|null; reviews?:Record<string,Review>;
   code: string; mode: Mode; status: 'lobby'|'starting'|'playing'|'ended'; hostId: string; players: Player[];
   chain: Word[]; events: ResetEvent[]; roundId: string; turnIndex: number; turnNumber: number; deadline: number|null; turnSeconds: number;
   manual: boolean; aiError: string|null; nextCheckAt: number; lease: {id:string; until:number; roundId:string}|null;
@@ -13,7 +22,7 @@ export function normalize(text:string) { return text.normalize('NFC').trim(); }
 export function validateWord(input:unknown):string {
   if(typeof input!=='string') throw new Error('กรุณาพิมพ์คำภาษาไทย');
   const word=normalize(input);
-  if(word.length<1||word.length>64||!/^[\u0E01-\u0E3A\u0E40-\u0E4E]+$/.test(word)||!/[ก-ฮ]/.test(word)) throw new Error('ใช้คำภาษาไทย 1–64 ตัวอักษร โดยไม่เว้นวรรคหรือใส่เครื่องหมาย');
+  if(word.length<1||word.length>200||!/[\p{L}]/u.test(word)||!/^[-\p{L}\p{M}\p{N} \u2010-\u2015.,!?…:'"()&/ฯๆ]+$/u.test(word)) throw new Error('ใช้คำนามหรือชื่อผลงาน 1–200 ตัวอักษร ไม่ใส่บรรทัดใหม่');
   return word;
 }
 export function validateName(input:unknown):string {
@@ -23,7 +32,8 @@ export function validateName(input:unknown):string {
   return name;
 }
 export function validateSyllables(word:string, value:unknown):string[] {
-  if(!Array.isArray(value)||!value.length||value.length>32||value.some(s=>typeof s!=='string'||!s||s.length>64||!/[ก-ฮ]/.test(s)||!/^[ก-ฮเแโใไ]/.test(s))||value.join('')!==word) throw new Error('ผลแบ่งพยางค์ไม่ตรงรูปเขียนเดิม กรุณาตรวจด้วยผู้เล่นหรือลองใหม่');
+  const written=word.replace(/[^\p{L}\p{M}\p{N}]/gu,'');
+  if(!Array.isArray(value)||!value.length||value.length>160||value.some(s=>typeof s!=='string'||!s||s.length>200||!/^\p{L}[\p{L}\p{M}\p{N}]*$|^\p{N}+$/u.test(s)||(/^[\u0E00-\u0E7F]/.test(s)&&!/^[ก-ฮเแโใไ๐-๙]/.test(s)))||value.join('')!==written) throw new Error('ผลแบ่งพยางค์ไม่ตรงรูปเขียนเดิม กรุณาตรวจด้วยผู้เล่นหรือลองใหม่');
   return value as string[];
 }
 export function duplicates(previous:string[], current:string[]) { return [...new Set(current.filter(s=>previous.includes(s)))]; }
@@ -34,23 +44,26 @@ export function createGame(code:string,mode:Mode,names:string[],hostHash:string,
   if(new Set(clean).size!==clean.length) throw new Error('ชื่อผู้เล่นต้องไม่ซ้ำกัน');
   if(![0,15,30,45,60].includes(seconds)) throw new Error('เวลาต้องเป็น 15, 30, 45, 60 วินาที หรือปิดเวลา');
   const players=clean.map((name,i)=>({id:crypto.randomUUID(),name,tokenHash:i===0?hostHash:''}));
-  return {code,mode,status:'lobby',hostId:players[0].id,players,chain:[],events:[],roundId:crypto.randomUUID(),turnIndex:0,turnNumber:0,deadline:null,turnSeconds:seconds,manual:false,aiError:null,nextCheckAt:0,lease:null,processed:[],createdAt:now,notice:null};
+  return {roundNumber:0,result:null,reviews:{},code,mode,status:'lobby',hostId:players[0].id,players,chain:[],events:[],roundId:crypto.randomUUID(),turnIndex:0,turnNumber:0,deadline:null,turnSeconds:seconds,manual:false,aiError:null,nextCheckAt:0,lease:null,processed:[],createdAt:now,notice:null};
 }
 function deadline(game:Game,now:number) { return game.turnSeconds ? now+game.turnSeconds*1000:null; }
 export function startRound(game:Game,seed:{text:string;syllables:string[]},now=Date.now()) {
   const text=validateWord(seed.text); const syllables=validateSyllables(text,seed.syllables);
+  const previous=roundWords(game);const sameSet=Boolean(game.competition&&!game.competition.setComplete);
+  prepareCompetition(game);
+  if(sameSet)game.archiveWords=previous;
+  game.roundNumber=game.competition!.round;game.result=null;game.challenge=null;
   game.roundId=crypto.randomUUID(); game.chain=[{id:crypto.randomUUID(),text,playerId:null,previousId:null,syllables,check:'valid',at:now}];
-  game.events=[]; game.turnIndex=0; game.turnNumber++; game.deadline=deadline(game,now); game.status='playing'; game.aiError=null;game.lease=null;game.nextCheckAt=0;game.notice=null;
+  game.events=[]; game.turnIndex=nextActiveIndex(game,-1); game.turnNumber++; game.deadline=deadline(game,now); game.status='playing'; game.aiError=null;game.lease=null;game.nextCheckAt=0;game.notice=null;
 }
 export function advanceTimeout(game:Game,now=Date.now()):boolean {
-  if(game.status!=='playing'||game.deadline===null||now<game.deadline) return false;
-  const turns=Math.floor((now-game.deadline)/(game.turnSeconds*1000))+1;
-  const name=game.players[game.turnIndex].name;
-  game.turnIndex=(game.turnIndex+turns)%game.players.length;game.turnNumber+=turns;game.deadline+=turns*game.turnSeconds*1000;
-  game.notice=turns===1?`${name} หมดเวลา — เปลี่ยนตาแล้ว`:`ข้าม ${turns} ตาที่หมดเวลา`;return true;
+  if(game.status!=='playing'||(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))||game.deadline===null||now<game.deadline) return false;
+  finishRound(game,game.players[game.turnIndex].id,'timeout',now);
+  game.notice=`${game.players[game.turnIndex].name} หมดเวลา — จบรอบ`;return true;
 }
 export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:number) {
   if(game.status!=='playing') throw new Error('รอให้เริ่มเกมก่อน');
+  if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))throw new Error('กำลังชาเลนจ์ รอผลก่อนต่อคำ');
   if(game.deadline!==null&&now>=game.deadline) throw new Error('หมดเวลาแล้ว รออัปเดตตาปัจจุบัน');
   if(expectedTurn!==game.turnNumber) throw new Error('ตาเปลี่ยนแล้ว กรุณาส่งคำอีกครั้ง');
   if(game.mode==='online'&&game.players[game.turnIndex].id!==actorId) throw new Error('ยังไม่ถึงตาของคุณ');
@@ -60,18 +73,18 @@ export function submitWord(game:Game,actorId:string,input:unknown,now:number,exp
   assertTurn(game,actorId,expectedTurn,now);const text=validateWord(input);
   if(game.chain.length>=1000) throw new Error('ครบ 1,000 คำแล้ว ให้เจ้าของห้องจบรอบแล้วเริ่มรอบใหม่');
   const word:Word={id:crypto.randomUUID(),text,playerId:game.players[game.turnIndex].id,previousId:game.chain.at(-1)?.id??null,syllables:null,check:'pending',at:now};
-  game.chain.push(word);game.turnIndex=(game.turnIndex+1)%game.players.length;game.turnNumber++;game.deadline=deadline(game,now);game.notice=null;return word;
+  game.chain.push(word);game.turnIndex=nextActiveIndex(game,game.turnIndex);game.turnNumber++;game.deadline=deadline(game,now);game.notice=null;return word;
 }
 export function skipTurn(game:Game,actorId:string,now:number,expectedTurn:number) {
-  assertTurn(game,actorId,expectedTurn,now);const name=game.players[game.turnIndex].name;
-  game.turnIndex=(game.turnIndex+1)%game.players.length;game.turnNumber++;game.deadline=deadline(game,now);game.notice=`${name} ข้ามตา`;
+  assertTurn(game,actorId,expectedTurn,now);finishRound(game,game.players[game.turnIndex].id,'surrender',now);
 }
-export function rollback(game:Game,wordId:string,reason:'duplicate'|'human',syllables:string[],now:number) {
+export function rollback(game:Game,wordId:string,reason:'duplicate'|'human'|'not_noun',syllables:string[],now:number) {
   const index=game.chain.findIndex(w=>w.id===wordId);if(index<1)return;
   const word=game.chain[index];const prev=game.chain[index-1];
   const name=(id:string|null)=>game.players.find(p=>p.id===id)?.name??'คำตั้งต้น';
   const removed=game.chain.splice(index);
-  game.events.push({id:crypto.randomUUID(),at:now,reason,word:word.text,wordId:word.id,previous:prev.text,previousId:prev.id,playerName:name(word.playerId),playerId:word.playerId!,syllables,reusable:removed.slice(1).map(w=>({text:w.text,playerName:name(w.playerId)})),removed});
+  game.events.push({id:crypto.randomUUID(),at:now,reason,word:word.text,wordId:word.id,previous:prev.text,previousId:prev.id,playerName:name(word.playerId),playerId:word.playerId!,syllables,explanation:reason==='not_noun'?word.analysis?.reason:undefined,suggestions:reason==='not_noun'?word.analysis?.suggestions:undefined,reusable:removed.slice(1).map(w=>({text:w.text,playerName:name(w.playerId)})),removed});
+  finishRound(game,word.playerId!,reason,now);
   game.turnIndex=Math.max(0,game.players.findIndex(p=>p.id===word.playerId));game.turnNumber++;game.deadline=game.status==='playing'?deadline(game,now):null;game.notice=null;
 }
 export function applySegments(game:Game,roundId:string,results:{id:string;syllables:string[]}[],now:number) {
@@ -83,6 +96,11 @@ export function applySegments(game:Game,roundId:string,results:{id:string;syllab
   for(let i=1;i<game.chain.length;i++) {
     const current=game.chain[i],previous=game.chain[i-1];
     if(current.manual){current.check='valid';continue;}
+    if(current.analysis){
+      const decision=nounDecision(current.analysis);
+      if(decision==='reject'){rollback(game,current.id,'not_noun',[],now);break;}
+      if(decision==='review'){current.check='review';continue;}
+    }
     if(!previous.syllables||!current.syllables)continue;
     const repeated=duplicates(previous.syllables,current.syllables);
     if(repeated.length){rollback(game,current.id,'duplicate',repeated,now);break;}
@@ -103,10 +121,35 @@ export function appealReset(game:Game,eventId:string,now:number) {
   // Descendants stay reset; an appeal only restores the disputed word.
 }
 export function scoreboard(game:Game) {
-  return game.players.map(p=>({id:p.id,name:p.name,score:game.chain.filter(w=>w.playerId===p.id&&w.check==='valid').length,pending:game.chain.filter(w=>w.playerId===p.id&&w.check!=='valid').length}));
+  return game.players.map(p=>({id:p.id,name:p.name,score:game.competition?.totals[p.id]??0,setScore:game.competition?.setPoints[p.id]??0,roundScore:game.competition?.roundPoints[p.id]??0,active:activeIds(game).includes(p.id),pending:game.chain.filter(w=>w.playerId===p.id&&w.check!=='valid').length}));
 }
 export function publicGame(game:Game,revision:number,youId:string,now=Date.now()) {
-  const {processed,lease,players,...safe}=game;
-  return {...safe,events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:game.chain.filter(w=>w.check!=='valid').length};
+  const {processed,lease,players,archiveWords,...safe}=game;
+  const challenge=game.challenge;
+  const publicChallenge=challenge?(({votes,...rest})=>({...rest,votesCast:Object.keys(votes).length,votedIds:Object.keys(votes),youVote:votes[youId]??null, tally:['resolved','judging'].includes(challenge.phase)?{yes:Object.values(votes).filter(Boolean).length,no:Object.values(votes).filter(v=>!v).length}:null}))(challenge):null;
+  return {...safe,challenge:publicChallenge,reviews:game.status==='ended'?game.reviews??{}:{},chain:['playing','ended'].includes(game.status)?game.chain.slice(-1):[],wordCount:Math.max(0,game.chain.length-1),needsCheck:['playing','ended'].includes(game.status)&&roundWords(game).some(needsAnalysis),reviewWords:game.status==='ended'?roundWords(game):[],events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:game.status==='ended'?roundWords(game).filter(needsAnalysis).length:game.chain.filter(w=>w.check!=='valid').length};
 }
 export type PublicGame = ReturnType<typeof publicGame>;
+
+export function needsAnalysis(word:Word) { return (!word.analysis && !word.manual && Boolean(word.playerId)) || (!word.syllables && !word.analysis); }
+export function roundWords(game:Game):Word[] {
+  return [...new Map([...(game.archiveWords??[]),...game.chain,...game.events.flatMap(e=>e.removed)].map(w=>[w.id,w])).values()];
+}
+export function finishRound(game:Game,loserId:string,reason:RoundResult['reason'],now:number) {
+  if(game.status!=='playing')return;
+  if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase)){game.challenge.phase='cancelled';game.challenge.deadline=null;}
+  if(!game.competition)prepareCompetition(game);
+  eliminate(game,loserId);
+  game.result={loserId,reason,at:now};game.status='ended';game.deadline=null;game.turnNumber++;
+}
+export function applyAnalyses(game:Game,roundId:string,results:{id:string;analysis:WordAnalysis}[],now:number) {
+  if(roundId!==game.roundId)return;
+  const live=results.map(r=>({word:roundWords(game).find(w=>w.id===r.id),analysis:r.analysis})).filter(r=>r.word);
+  // Validate all results before any mutation. Removed words remain available for post-round review.
+  const valid=live.map(r=>({word:r.word!,analysis:validateAnalysis(r.word!.text,r.analysis)}));
+  for(const {word,analysis} of valid){word.analysis=analysis;word.syllables=analysis.syllables;if(!word.manual)word.check='pending';}
+  // After a round has a loser, later results are review material only.
+  if(game.status==='ended'&&game.result){for(const {word} of valid)if(!word.manual)word.check='review';return;}
+  applySegments(game,roundId,[],now);
+  for(const word of game.chain)if(word.playerId&&!word.manual&&!word.analysis)word.check='pending';
+}

@@ -1,79 +1,87 @@
 # Verification — 2026-10-20
 
-Authoritative source: `D:\KHAMTONGCHAEUM`. Final target: Next.js 16.3.4 on Vercel, Lakebase Postgres through Neon, Gemini 3.5 Flash-Lite.
+Source: `D:\KHAMTONGCHAEUM`. Next.js 16.3.4, Node 24.18.0, Vercel target, Neon Postgres, Gemini 3.5 Flash-Lite. This replaces the original 17-test report for the earlier continuous-play prototype.
 
-## Build and tests
+## Final build and deterministic tests
 
-`npm run build` passed after Neon setup:
+`npm test`:
 
 ```text
-✓ Compiled successfully in 744ms
-Finished TypeScript in 2.2s
-✓ Generating static pages using 7 workers (5/5)
+ℹ tests 36
+ℹ pass 36
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+```
+
+Coverage includes written homophones, adjacent-only comparison, delayed non-noun/duplicate results, hidden active history including archived phases, uncertain classifications, cache hits for accepted and rejected words, human confirmation, model overwrite protection, stale results, turn expiry, survivor turns, eight-player finalist points, all five sets, cumulative rounds, online authorization, vote privacy, stale challenge IDs, timed debate/voting, AI tie-break dispatch, command idempotency and real SQLite SQL/CAS behavior.
+
+`npm run typecheck` passed. The final `npm run build` also includes TypeScript checking and reported:
+
+```text
+✓ Compiled successfully in 6.8s
+Finished TypeScript in 3.3s
+✓ Generating static pages using 7 workers (5/5) in 734ms
 Route (app)
 ┌ ○ /
 ├ ƒ /api/check
 ├ ƒ /api/room
-└ ƒ /api/status
+├ ƒ /api/status
+└ ○ /_not-found
 ```
 
-`npm test` passed all 17 tests (0 failures). Coverage includes written homophones, comparison with only the previous word, strict original spelling, asynchronous rollback, score removal, restored turn, replay, stale round/word results, expired turns, concurrent submissions, command idempotency, host authorization, SQL compare-and-swap, cache upsert and model isolation.
+The final build was started using `npm start`: `Ready in 292ms` on port 5173.
 
-The built app was started with `npm start`; it reported `Ready in 159ms`. The initial local-only check returned HTTP 200. After restarting with pulled Neon variables, both application smoke tests below ran against `backend: neon`.
+## Neon schema and persistence
 
-## Neon service proof
+The existing user-selected production project and pooled pg integration were preserved. `node scripts/setup-db.mjs` reported `Database schema is ready.` It added only `word_analysis_cache`; the existing room and legacy syllable tables were retained. No tables or data were deleted.
 
-Selected project: `lingering-hat-67473382`, organization `org-calm-resonance-38081632`, branch `production` (`br-icy-dust-azboc4uf`), region `aws-ap-southeast-1`, Postgres 18.
-
-Initial inspection connected successfully and found no existing game columns or user tables. `npm run db:setup` then reported `Database schema is ready.` It creates only `rooms` and `syllable_cache` through a direct connection and transaction. No existing data was removed.
-
-`neon deploy` succeeded:
-
-```text
-Auth complete (profile DEFAULT)
-Applying to branch production (br-icy-dust-azboc4uf)
-No changes — branch production already matches the policy.
-Utilized services: Postgres
-Pulled 3 Neon variables into .env.local
-Postgres DATABASE_URL, DATABASE_URL_UNPOOLED
-Branch NEON_BRANCH
-```
-
-`node scripts/smoke-online.mjs --require-neon`:
+Read-only inspection after testing returned:
 
 ```json
-{"backend":"neon","mode":"online","players":2,"authorization":"PASS","sharedState":"PASS","rollback":"PASS","reuse":"PASS","score":"PASS","roomEnded":true,"result":"PASS"}
+{"connected":true,"legacySyllableRows":11,"analysisRows":[{"source":"model","count":15},{"source":"players","count":1}]}
 ```
 
-This test uses two distinct player tokens through actual HTTP routes. It creates/joins a room, rejects guest-only attempts to start or play out of turn, submits both turns, reads shared state, rolls back a word and its descendant, reuses the reset word, confirms a point and ends the round.
+`source=model` is a reusable draft. `source=players` requires host confirmation and cannot be overwritten by a model cache write. Tests use named QA rooms and synthetic player sessions on the selected Neon branch.
 
-`node scripts/smoke-live.mjs --allow-live --require-neon`:
+## Four-session, five-set HTTP proof
+
+`node scripts/smoke-competition.mjs --require-neon`, rerun against the final build:
 
 ```json
-{"backend":"neon","model":"gemini-3.5-flash-lite"}
-{"phase":"before check","words":["เรือ","ปลา","ปลาดาว","ท้องฟ้า","เมฆ"],"pending":4,"turn":"ทดสอบ บี"}
-{"phase":"after check","seed":"เรือ","chain":["เรือ","ปลา"],"culprit":"ทดสอบ บี","repeated":["ปลา"],"reusable":["ท้องฟ้า","เมฆ"],"replay":"accepted","result":"PASS"}
+{"backend":"neon","sets":5,"challengeAuthorization":"PASS","votePrivacy":"PASS","concurrentVoteIdempotency":"PASS","humanConfirmation":"PASS","elimination":"PASS","scores":[{"name":"QA เซ็ต โฮสต์","score":0},{"name":"QA เซ็ต คน 1","score":5},{"name":"QA เซ็ต คน 2","score":7},{"name":"QA เซ็ต คน 3","score":15}],"savedAcrossSessions":"PASS","result":"PASS"}
 ```
 
-This test makes actual Gemini requests. Four words were accepted and turns advanced before the model returned. The result then removed the offending word and its descendants and accepted replay of a reset word. Both tests left clearly named test rooms ended on the selected production branch.
+The challenger earns two extra points. Third/final survivors earn placement points and each set winner earns two additional points. A read through another authenticated session confirms persisted scores. The test submits the final vote twice concurrently using the same command ID and proves points are awarded once. Guests can propose word corrections but cannot confirm global cache writes.
+
+## Real model and database reuse
+
+`node --experimental-strip-types scripts/smoke-analysis.mjs --allow-live` checked twelve classifications: วิ่ง, การวิ่ง, สุข, ความสุข, แดง, สีแดง, ส้ม, การบ้าน, ถ้าเราเจอกันอีก, แปลรักฉันด้วยใจเธอ, ฉันเดินไปซื้อข้าวที่ตลาดทุกวัน, ความโต๊ะ.
+
+Initial run: twelve expected classifications passed using three model calls, with complete second reads from Neon. Repeating the script against the stored entries reported:
+
+```json
+{"cases":12,"modelCalls":0,"secondRead":"all database hits; no model calls","result":"PASS"}
+```
+
+This proves classification decisions and cache reuse, not perfect segmentation. The model divided a portion of the rejected long sentence incorrectly while preserving all letters. This remains an unconfirmed draft; the post-phase review flow is provided to correct such errors. The prompt now includes an example addressing that boundary. No test claims all Thai readings or all titles are validated.
+
+`node scripts/smoke-live.mjs --allow-live --require-neon` used a model-selected seed, accepted four pending submissions immediately, then detected the duplicate and eliminated its author:
+
+```json
+{"phase":"after check","seed":"เรือ","chain":["ปลา"],"culprit":"ทดสอบ บี","repeated":["ปลา"],"reusable":["ท้องฟ้า","เมฆ"],"survivors":2,"elimination":"PASS","summary":"PASS","result":"PASS"}
+```
+
+`node scripts/smoke-tiebreak.mjs --allow-live` generated a genuine 1–1 vote and invoked the real model. It returned `connected=true`, explaining that fish inhabit the sea; the app eliminated the challenger and awarded two bonus points. The run reported `result=PASS`.
+
+The first tie-break attempt hit the old 25-second upstream timeout. After raising it to 45 seconds, with a 55-second browser check timeout, 65-second job lease and existing 60-second Vercel route budget, the retry passed. Model failures keep the challenge unresolved and retryable. pg also emits an advisory about future SSL-mode semantics; connections and tests succeeded with the current verified TLS behavior.
 
 ## Browser verification
 
-- Shared-device setup and actual model interaction were exercised in the in-app browser.
-- Two independent browser tabs created/joined the same online room, alternated submissions and showed matching turns. Host rejection reset the descendant word and scores.
-- Desktop visual review at 1280px and setup-page review in a 390px iframe passed. No horizontal overflow was visible; cross-iframe DOM measurement was unavailable, so this is a visual check.
-- Browser checks initially ran on the original local adapter. The final Next.js/Neon migration was verified by production build and the real HTTP/Neon tests above; it was not verified on a physical phone or a published Vercel URL.
+Through the actual shared-device UI: created four players, submitted a word, confirmed the earlier word disappeared from active play, opened a challenge from an eligible player, completed both speaking turns, cast two votes, observed elimination and the correct three points for the owner (two challenge plus one finalist), proposed a noun/segmentation review and explicitly confirmed it. The UI displayed that the word was saved for future use.
 
-## Resolved issues
+At 390×844, the review form and controls fit the viewport; a read-only DOM check found no elements overflowing the right edge. The viewport override was reset. No browser error logs were observed. Screenshots are delivered in the conversation output folder.
 
-- Windows Sites npm helper resolved npm scripts incorrectly. Its platform is no longer used; standard Next/npm scripts now build correctly.
-- Gemini 2.5 Flash-Lite returned 404 for new accounts and recommended 3.5 Flash-Lite. The replacement was verified live. A strict segmentation guard rejects standalone vowel fragments and rewritten spellings.
-- `neon init -y` initially linked offline because no CLI account was signed in. The user completed browser OAuth, after which deploy/status/direct Postgres access succeeded.
-- Obsolete Cloudflare types and connector files were archived under ignored `work/legacy-sites`; they are not part of the final build.
-- Sites source publication was rejected by automatic approval review before any source upload. The user then explicitly chose GitHub/Vercel instead; no Sites source was uploaded or Site deployed.
+## Deployment boundary
 
-## Remaining boundaries
-
-- Thai segmentation has not been benchmarked across a large corpus; human review remains available.
-- The application database connection, CLI and plugin installation are verified. The Neon MCP endpoint is configured by the enabled official plugin, but no Neon MCP tool call has run in this chat because the current tool set has not refreshed.
-- Vercel deployment itself is user-managed and has not been performed here. Vercel needs its own environment variables; `.env.local` is intentionally excluded from GitHub.
+The app was tested locally against the real Neon service and model. No Vercel production deployment or production URL was verified in this run. The existing Neon plugin/MCP, CLI login, env files, Vercel/Next configuration and database credentials were preserved. All credentials remain excluded from Git.

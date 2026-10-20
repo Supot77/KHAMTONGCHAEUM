@@ -6,7 +6,7 @@ type Session={code:string;token:string};
 type ProviderStatus={configured:boolean;model:string};
 const STORAGE='khamtongchaeum-session-v1';
 async function request<T=PublicGame>(path:string,body?:unknown):Promise<T>{
-  const response=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(path==='/api/check'?35000:15000)}:{cache:'no-store'});
+  const response=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(path==='/api/check'?55000:15000)}:{cache:'no-store'});
   const data=await response.json() as T & {error?:string};if(!response.ok)throw new Error(data.error??'เชื่อมต่อไม่ได้ กรุณาลองใหม่');return data;
 }
 export function useRoom(){
@@ -23,8 +23,8 @@ export function useRoom(){
   },[refresh,refreshProvider]);
   useEffect(()=>{if(!session)return;const timer=setInterval(()=>{void refresh();},1000);return()=>clearInterval(timer);},[session,refresh]);
   useEffect(()=>{
-    if(!game||!session||!provider?.configured||game.manual||checking.current)return;
-    if(game.status!=='starting'&&!game.chain.some(w=>!w.syllables))return;
+    if(!game||!session||!provider?.configured||(game.manual&&game.challenge?.phase!=='judging')||checking.current)return;
+    if(game.status!=='starting'&&!game.needsCheck&&game.challenge?.phase!=='judging')return;
     if(game.serverNow<game.nextCheckAt)return;
     if(Date.now()-lastCheck.current<1500)return;
     lastCheck.current=Date.now();
