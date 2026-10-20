@@ -1,3 +1,73 @@
+# Verification — 2026-10-21
+
+This update verifies the room-expiry implementation in commit `383fbac` and documents the current word-analysis pipeline. The 2026-10-20 report below is historical; its database row counts and 36-test total are not current measurements.
+
+## Current deterministic checks and production build
+
+`npm test` reported **43 tests, 43 passed, 0 failed**. Coverage now also includes the exact one-hour boundary, rejection of expired-room access and revival, successful presence renewal, background writes that do not renew activity, unauthorized heartbeat rejection, cache-preserving cleanup and scheduled-delivery idempotency.
+
+`npm run build` completed successfully:
+
+```text
+✓ Compiled successfully in 3.4s
+Finished TypeScript in 2.7s
+✓ Generating static pages using 7 workers (5/5) in 682ms
+Routes: /, /api/check, /api/room, /api/status, /_not-found
+```
+
+`npm start` reported `Ready in 210ms` on port 5173. No application source was changed after this build; the follow-up adds only the expiry smoke script and documentation.
+
+## Real Neon expiry test
+
+```text
+node --experimental-strip-types scripts/smoke-expiry.mjs --allow-test-rooms --require-neon
+```
+
+```json
+{"backend":"neon","expiryMs":3600000,"accessAfterExpiry":410,"heartbeatCannotRevive":"PASS","activeRoomPreserved":"PASS","physicalDelete":"PASS","sharedWordCachePreserved":"PASS","deleted":1,"result":"PASS"}
+```
+
+The script creates explicitly named QA rooms and ages only those room codes with a matching QA-name guard. It proves the same shared SQL cleanup removes the expired row while leaving the active room and shared word cache intact. The first script attempt assumed the legacy `syllable_cache` existed and failed; live inspection showed it is absent. The script now checks table existence and tests preservation only if present. No table was recreated and no user data was overwritten.
+
+## Native scheduled cleanup
+
+The existing deployed Neon Function `roomcleanup` and enabled `expired-rooms` trigger were verified. The schedule is `*/15 * * * *`, independent of the Vercel frontend. Actual function application logs show scheduled invocations and deletion counts, including:
+
+```text
+{"job":"expired-rooms","scheduledAt":"2026-10-20T15:00:00Z","deleted":2}
+{"job":"expired-rooms","scheduledAt":"2026-10-20T15:15:00Z","deleted":0}
+{"job":"expired-rooms","scheduledAt":"2026-10-20T15:30:00Z","deleted":3}
+{"job":"expired-rooms","scheduledAt":"2026-10-20T15:45:00Z","deleted":4}
+```
+
+These are application-log message bodies with UTC schedule timestamps. The scheduler continues at 15-minute intervals. Logical expiration is enforced at one hour; physical deletion follows a cleanup sweep and is subject to service availability. The pg SSL-mode compatibility advisory still appears on stderr; it did not prevent connections or cleanup.
+
+## Browser expiry proof
+
+Created a shared-device QA room through the actual browser UI, enabled manual checking and used the seed ทะเล to avoid a model call. A guarded SQL update aged only this QA room past one hour. The browser's next state read returned to the setup screen with:
+
+```text
+ห้องหมดอายุหรือไม่พบห้องนี้แล้ว กรุณาตั้งวงใหม่ (ห้องไม่มีผู้ใช้งานครบ 1 ชั่วโมงจะถูกลบ)
+```
+
+Screenshot: `outputs/khamtongchaeum-room-expired.png` in the conversation's artifact directory. This confirms the client clears the old room session and displays the server's expiry notice.
+
+## Current word-cache reuse
+
+The twelve-case analysis smoke was rerun against the real shared database:
+
+```json
+{"cases":12,"modelCalls":0,"secondRead":"all database hits; no model calls","result":"PASS"}
+```
+
+This proves reuse and expected classifications for those fixtures; it does not prove all Thai syllable boundaries or title facts. Existing cached analyses were preserved. No Gemini call was needed for this follow-up's cache or expiry checks. See [WORD-CHECKING.md](WORD-CHECKING.md) for the current implementation, human-review safeguards and known limitations.
+
+## Deployment boundary
+
+The current local production build was tested against real Neon, and the deployed Neon cleanup trigger was verified from actual overnight logs. No Vercel production URL was supplied or verified in this follow-up. Credentials and the existing Neon/MCP configuration were preserved.
+
+---
+
 # Verification — 2026-10-20
 
 Source: `D:\KHAMTONGCHAEUM`. Next.js 16.3.4, Node 24.18.0, Vercel target, Neon Postgres, Gemini 3.5 Flash-Lite. This replaces the original 17-test report for the earlier continuous-play prototype.

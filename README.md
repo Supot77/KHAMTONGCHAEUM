@@ -24,9 +24,19 @@
 
 ## ฐานคำและการช่วยตรวจทาน
 
-`word_analysis_cache` เก็บพยางค์ ประเภทคำ ประเภทย่อย เหตุผล และคำแนะนำ แยกตามรุ่นกติกาและโมเดล โค้ดค้นฐานข้อมูลก่อนเสมอ คำเดิมใช้ข้อมูลที่มีแล้ว; คำใหม่จึงส่งให้โมเดลวิเคราะห์แล้วบันทึกฉบับร่าง รวมทั้งผลว่าไม่ใช่คำนาม คำที่โมเดลไม่แน่ใจรอให้คนตรวจ และไม่เรียกโมเดลซ้ำวนไปเรื่อย ๆ ตาราง `syllable_cache` เดิมยังเก็บไว้ แต่ไม่ใช้ผลเก่าที่ไม่มีชนิดคำมาตัดสินกติกาใหม่
+`word_analysis_cache` เก็บพยางค์ ประเภทคำ ประเภทย่อย เหตุผล และคำแนะนำ แยกตามรุ่นกติกาและโมเดล โค้ดค้นฐานข้อมูลก่อนเสมอ คำเดิมใช้ข้อมูลที่มีแล้ว; คำใหม่จึงส่งให้โมเดลวิเคราะห์แล้วบันทึกฉบับร่าง รวมทั้งผลว่าไม่ใช่คำนาม คำที่โมเดลไม่แน่ใจรอให้คนตรวจ และไม่เรียกโมเดลซ้ำวนไปเรื่อย ๆ โค้ดยังรองรับตาราง `syllable_cache` เดิมเพื่อความเข้ากันได้ แต่เส้นทางตรวจปัจจุบันใช้ `word_analysis_cache` และไม่ใช้ข้อมูลพยางค์เก่าที่ไม่มีชนิดคำมาตัดสิน
 
 หลังจบช่วงคำ ทุกคนเสนอการแก้พยางค์หรือประเภทคำได้ เจ้าของห้องต้องกด **ยืนยันและบันทึกฐานคำ** ก่อนคำแก้จะเป็นข้อมูลส่วนกลาง ผลจากผู้เล่นที่ยืนยันแล้วจะไม่ถูกผลโมเดลเขียนทับ การแก้มีผลต่อการตรวจครั้งถัดไป ผลการแข่งขันที่จบแล้วคงเดิม
+
+## ห้องหมดอายุเมื่อไม่มีคนใช้งาน
+
+ห้องหมดอายุเมื่อไม่มีผู้เล่นใช้งานครบ **1 ชั่วโมง** คำสั่งที่สำเร็จและ heartbeat จากหน้าเว็บที่มองเห็นประมาณทุก 60 วินาทีต่ออายุห้องได้ การอ่านสถานะและงานตรวจโมเดลไม่ต่ออายุ เมื่อหมดอายุ API ตอบ HTTP 410 และหน้าเว็บล้างเซสชันกลับหน้าตั้งวง ห้องที่หมดอายุแล้วไม่สามารถส่ง heartbeat เพื่อคืนชีพได้
+
+Neon Function `roomcleanup` มี schedule trigger ทุก **15 นาที** ทำงานได้แม้ทุกคนปิดเว็บ เวลาปฏิเสธเข้าเล่นคือครบ 1 ชั่วโมง ส่วนการลบแถวจริงอาจตามมาในรอบงานถัดไป ลบสถานะเกม คะแนน และข้อเสนอแก้คำที่ยังไม่ยืนยันของห้องนั้น แต่รักษาฐานคำกลาง `word_analysis_cache` ไว้ใช้ข้ามห้อง การเปิดแท็บทิ้งไว้ที่มองเห็นยังนับว่าใช้งาน
+
+ตั้ง Function และ trigger ตาม `neon.ts` ด้วย `neon deploy` การ deploy frontend บน Vercel เป็นอีกขั้นตอนหนึ่ง ไม่ต้องตั้ง Vercel Cron สำหรับงานนี้
+
+อ่านลำดับงานตรวจคำ รูปแบบข้อมูล กติกาคำนาม การเทียบพยางค์ การประหยัดโทเคน และข้อจำกัดอย่างละเอียดใน [เบื้องหลังระบบแยกคำและตรวจคำซ้ำ](docs/WORD-CHECKING.md)
 
 ## รันในเครื่อง
 
@@ -56,7 +66,7 @@ npm.cmd run dev
 
 ## ตั้งค่า Neon
 
-Project ที่ผู้ใช้ระบุ: `lingering-hat-67473382` ใน org `org-calm-resonance-38081632` ใช้ branch `production` และบริการ Postgres เท่านั้น
+Project ที่ผู้ใช้ระบุ: `lingering-hat-67473382` ใน org `org-calm-resonance-38081632` ใช้ branch `production` พร้อม Postgres และ Function `roomcleanup` สำหรับล้างห้องหมดอายุ
 
 ```powershell
 npm.cmd i -g neon@latest
@@ -107,9 +117,10 @@ node scripts/smoke-live.mjs --allow-live
 node scripts/smoke-competition.mjs --require-neon
 node --experimental-strip-types scripts/smoke-analysis.mjs --allow-live
 node scripts/smoke-tiebreak.mjs --allow-live
+node --experimental-strip-types scripts/smoke-expiry.mjs --allow-test-rooms --require-neon
 ```
 
-ชุด competition ทดสอบ 4 เซสชันผ่าน HTTP เล่นครบ 5 เซ็ต ตรวจสิทธิ์ โหวตซ้ำพร้อมกัน และการยืนยันฐานคำ ชุด analysis ตรวจตัวอย่างภาษา 12 กรณีและอ่านฐานซ้ำ ชุด tiebreak เรียกโมเดลจริงเมื่อเสียงเสมอ
+ชุด competition ทดสอบ 4 เซสชันผ่าน HTTP เล่นครบ 5 เซ็ต ตรวจสิทธิ์ โหวตซ้ำพร้อมกัน และการยืนยันฐานคำ ชุด analysis ตรวจตัวอย่างภาษา 12 กรณีและอ่านฐานซ้ำ ชุด tiebreak เรียกโมเดลจริงเมื่อเสียงเสมอ ชุด expiry สร้างห้อง QA และปรับเวลาเฉพาะห้องทดสอบเพื่อพิสูจน์การปฏิเสธห้องหมดอายุ การไม่คืนชีพ การลบจริง และการรักษาฐานคำ โดยไม่เรียกโมเดล
 
 ## ข้อจำกัดที่ควรรู้
 
@@ -131,6 +142,7 @@ Gemini อาจแบ่งพยางค์ผิดได้ แม้ผล
 | `lib/storage-local.ts` | SQLite สำหรับพัฒนาในเครื่อง |
 | `database/schema.sql`, `scripts/setup-db.mjs` | Schema และคำสั่งตั้งฐานข้อมูล |
 | `app/components/` | เลือกโหมด ห้องรอ เกม คะแนน และรายการรีเซ็ต |
+| `lib/room-lifecycle.ts`, `functions/roomcleanup.ts` | อายุห้องและงานล้างตามเวลาบน Neon |
 | `neon.ts`, `vercel.json` | การตั้งค่า backend และ host |
 
 เอกสารต้นทาง: [Neon skill](https://neon.com/.well-known/agent-skills/neon/SKILL.md), [Neon Postgres skill](https://neon.com/.well-known/agent-skills/neon-postgres/SKILL.md), [Vercel pool management](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool), [Gemini Free Tier](https://ai.google.dev/gemini-api/docs/pricing)
