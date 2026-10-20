@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { createSqlStore,postgresPlaceholders } from '../lib/sql-store.ts';
+import { createGame } from '../lib/game.ts';
+test('real SQL store persists, CAS prevents stale writes, cache upserts and model isolation',async()=>{
+  const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../database/schema.sql',import.meta.url),'utf8'));
+  const store=createSqlStore(async(q,p)=>db.prepare(q).all(...p));
+  const game=createGame('ABCDEF','shared',['เอ','บี'],'hash',30,1000);
+  assert.equal(await store.insert(game),true);assert.equal(await store.insert(game),false);
+  let row=await store.read('ABCDEF');assert.equal(row.revision,0);
+  row.game.notice='saved';assert.equal(await store.write('ABCDEF',0,row.game),true);assert.equal(await store.write('ABCDEF',0,game),false);
+  assert.equal((await store.read('ABCDEF')).game.notice,'saved');
+  await store.cache('model-a',{'ปลา':['ปลา'],'ทะเล':['ทะ','เล']});
+  assert.deepEqual(await store.cached('model-a',['ปลา','ทะเล']),{'ปลา':['ปลา'],'ทะเล':['ทะ','เล']});
+  assert.deepEqual(await store.cached('model-b',['ปลา']),{});
+  await store.cache('model-a',{'ปลา':['ปลา']});assert.deepEqual(await store.cached('model-a',['ปลา']),{'ปลา':['ปลา']});
+  db.close();
+});
+test('Postgres adapter numbers only parameter slots',()=>{assert.equal(postgresPlaceholders('WHERE code = ? AND revision = ?'),'WHERE code = $1 AND revision = $2');});
