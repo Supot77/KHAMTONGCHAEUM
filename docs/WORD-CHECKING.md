@@ -137,3 +137,14 @@ Prompt วิเคราะห์คำใหม่และ prompt ตรว�
 คำสั่ง leave ถอดสมาชิกออกจาก players แล้วเก็บเพียง ID/ชื่อใน departedPlayers เพื่ออ้างชื่อผู้พูดในคำเดิม ไม่เก็บ tokenHash ของผู้ที่ออก สิทธิ์เจ้าของย้ายไปคนแรกในรายชื่อที่ยังอยู่ การออกขณะยัง active ถือว่าตกรอบ หากเหลือผู้ชนะหนึ่งคนปิดเซ็ต หากยังหลายคนใช้นับถอยหลังและคำหลักเดิมต่อ ผู้ที่ตกรอบอยู่แล้วออกไม่เปลี่ยนตาหรือเวลาของคนที่กำลังเล่น ชาเลนจ์ที่ถูกขัดจังหวะด้วยการออกของผู้เล่น active ถูกยุติและไม่ให้โบนัสชนะชาเลนจ์
 
 คำที่คนออกเคยพูดและยังมีผลยังอยู่ในสาย จึงยังตรวจคำซ้ำได้พร้อมชื่อเดิม ผู้เล่นที่ออกไม่กลับมาในเซ็ตถัดไปจนกว่าจะเข้าห้องใหม่ ลบห้องว่างหรือห้องเครื่องเดียวด้วยรหัส revision ป้องกันการลบห้องที่มีคนเพิ่งเข้ามาสำเร็จพร้อมกัน ฐานคำกลางกับประวัติคำไม่ถูกลบพร้อมห้อง
+
+
+## Partial model batches (2026-10-21)
+
+The analysis parser now validates each exact requested spelling independently. Missing, malformed, invalid-spelling and duplicate answer rows are left unresolved; unsolicited words are ignored. Any valid peers are returned and saved immediately. An entirely unusable batch still raises AiError. Strict validation remains in place for player review responses and dictionary edits.
+
+Room checks re-read authoritative dictionary facts after saving, apply all successful words, and leave only unresolved words in the error/pending state. The next check waits 15 seconds; dictionary cache hits still work immediately on submit and already saved words never re-enter the model batch. Global analysis claims are released in finally, and existing human-correction protection, adjacent-syllable comparisons and full-word duplicate evidence remain intact.
+
+The dictionary page uses a search-first layout: result index, headword, category, written-syllable breakdown, classification explanation, source and update date. Editing is explicitly opened/closed. The explanation is the stored analysis reason, not an invented definition or imported dictionary text. Existing member authentication, audit and version-conflict handling are unchanged.
+
+Layout reference: [Longdo dictionary search](https://dict.longdo.com/search/พจนานุกรม), inspected 2026-10-21 through publicly retrieved page structure (search, headword, category and grouped explanations). Cambridge's English–Thai page was found but direct fetching returned 403; no claims about its detailed layout are made. The UI keeps the game's own branding and does not reuse third-party logos or entries.

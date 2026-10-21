@@ -1,6 +1,6 @@
 'use client';
 import {useCallback,useEffect,useRef,useState} from 'react';
-import {ArrowLeft,BookOpen,Search,Save,LoaderCircle} from 'lucide-react';
+import {ArrowLeft,BookOpen,Search,Save,LoaderCircle,Pencil,CheckCircle2,ArrowRight,X} from 'lucide-react';
 import {useRoom} from './use-room';
 import {CATEGORIES,NOUN_TYPES} from '@/lib/word-analysis';
 import type {WordAnalysis} from '@/lib/word-analysis';
@@ -12,30 +12,42 @@ async function call<T>(body:unknown):Promise<T>{
  const data=await response.json();if(!response.ok)throw new Error(data.error??'อ่านหรือบันทึกคำไม่สำเร็จ');return data;
 }
 export function DictionaryPage(){
- const room=useRoom(false),[query,setQuery]=useState(''),[items,setItems]=useState<DictionaryEntry[]>([]),[cursor,setCursor]=useState<string|null>(null),[selected,setSelected]=useState<DictionaryEntry|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+ const room=useRoom(false),[query,setQuery]=useState(''),[activeQuery,setActiveQuery]=useState(''),[items,setItems]=useState<DictionaryEntry[]>([]),[cursor,setCursor]=useState<string|null>(null),[selected,setSelected]=useState<DictionaryEntry|null>(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const serial=useRef(0),code=room.session?.code,token=room.session?.token;
  const load=useCallback(async(search:string,after='',append=false)=>{
   if(!code||!token)return;const id=++serial.current;setLoading(true);setError('');
-  try{const page=await call<WordPage>({action:'list',code,token,query:search,after});if(id!==serial.current)return;setItems(old=>append?[...old,...page.items]:page.items);setCursor(page.nextCursor);}
+  try{const page=await call<WordPage>({action:'list',code,token,query:search,after});if(id!==serial.current)return;setItems(old=>append?[...old,...page.items]:page.items);setCursor(page.nextCursor);setActiveQuery(search);if(!append)setSelected(old=>page.items.find(item=>item.word===old?.word)??page.items[0]??null);}
   catch(e){if(id===serial.current)setError(e instanceof Error?e.message:'อ่านคลังคำไม่สำเร็จ');}
   finally{if(id===serial.current)setLoading(false);}
  },[code,token]);
  useEffect(()=>{void load('');return()=>{serial.current++;};},[load]);
  async function save(entry:DictionaryEntry,word:string,analysis:WordAnalysis){
   const result=await call<{entry:DictionaryEntry}>({action:'save',code,token,originalWord:entry.word,word,analysis,expectedUpdatedAt:entry.updatedAt});
-  setSelected(result.entry);setNotice('บันทึกแล้ว คำที่ส่งครั้งถัดไปจะใช้ข้อมูลนี้');await load(query);
+  setSelected(result.entry);setNotice('บันทึกแล้ว คำที่ส่งครั้งถัดไปจะใช้ข้อมูลนี้');await load(activeQuery);
  }
- return <div className="app-shell dictionary-shell"><header className="site-header"><a className="text-button" href="/"><ArrowLeft size={18}/> กลับไปเกม</a><span><BookOpen size={19}/> คลังคำ</span></header>
- <main className="dictionary-main"><div className="dictionary-intro"><h1>คลังคำของวงเรา</h1><p>แก้ตัวสะกด แบ่งพยางค์ และประเภทคำร่วมกัน ผู้เล่นทุกคนที่ยังอยู่ในห้องแก้ได้</p><p className="muted small">การแก้คำใช้กับการส่งครั้งถัดไป ผลการแข่งขันเดิมคงเดิม · หน้านี้ไม่เรียกโมเดล</p></div>
- {!room.session||!room.game?<section className="dictionary-message"><p>{room.session?'กำลังตรวจสมาชิกห้อง…':'เข้าห้องเกมก่อนเพื่อเปิดและแก้ไขคลังคำ'}</p><a className="button subtle" href="/">กลับไปเข้าห้อง</a>{room.error&&<p role="alert">{room.error}</p>}</section>:<>
- <p className="dictionary-membership">ห้อง {code} · {room.game.players.find(p=>p.id===room.game?.youId)?.name} · ระหว่างเล่น เวลาของเกมยังเดินเมื่อเปิดหน้านี้</p>
- {notice&&<p className="dictionary-notice" role="status">{notice}</p>}{error&&<p className="inline-error" role="alert">{error}</p>}
- <div className="dictionary-layout"><section className="dictionary-list" aria-label="รายการคำศัพท์"><form className="dictionary-search" onSubmit={e=>{e.preventDefault();setSelected(null);void load(query);}}><label className="sr-only" htmlFor="dictionary-search">ค้นหาคำศัพท์</label><input id="dictionary-search" value={query} onChange={e=>setQuery(e.target.value)} maxLength={200} placeholder="ค้นหาคำศัพท์…"/><button className="button subtle" disabled={loading} aria-label="ค้นหาคำศัพท์"><Search size={18}/></button></form>
- <div className="dictionary-rows">{items.map(entry=><button type="button" key={entry.word} className={`dictionary-row ${selected?.word===entry.word?'selected':''}`} onClick={()=>{setSelected(entry);setNotice('');}}><strong>{entry.word}</strong><span>{entry.analysis.syllables.join(' / ')}</span><small>{categoryLabel[entry.analysis.category]} · {entry.source==='players'?'ผู้เล่นยืนยัน':'โมเดลวิเคราะห์'}</small></button>)}</div>
- {!loading&&!items.length&&<p className="dictionary-empty">ยังไม่พบคำที่ค้นหา</p>}{loading&&<p role="status" className="dictionary-empty">กำลังอ่านคำ…</p>}{cursor&&<button className="button subtle wide" disabled={loading} onClick={()=>void load(query,cursor,true)}>โหลดคำถัดไป</button>}
- </section><section className="dictionary-editor-panel" aria-label="แก้ไขคำศัพท์">{selected?<WordEditor key={selected.word+':'+selected.updatedAt} entry={selected} onSave={save} onReload={()=>{setSelected(null);void load(query);}}/>:<div className="dictionary-empty"><BookOpen size={32}/><h2>เลือกคำที่ต้องการแก้</h2><p>แบ่งให้ละเอียดตามการอ่าน แล้วคงตัวสะกดเดิมไว้ครบ</p><p>กรุง / เทพ / ม / หา / น / คร<br/>ม / หา / ส / มุทร</p></div>}</section></div></>}
+ return <div className="app-shell dictionary-shell"><header className="site-header"><a className="dictionary-brand" href="/"><span className="dictionary-mark"><BookOpen size={24}/></span><span>คำต้องเชื่อม<small>คลังคำศัพท์ของผู้เล่น</small></span></a><a className="dictionary-back" href="/"><ArrowLeft size={16}/> กลับไปเกม</a></header>
+ <main className="dictionary-main"><section className="dictionary-intro"><p className="dictionary-eyebrow">พจนานุกรมประจำวง</p><h1>ทุกคำ มีที่มา<span className="violet">และพยางค์ของมัน</span></h1><p>ค้นคำ อ่านการแบ่งพยางค์ และช่วยกันทำให้คลังคำแม่นขึ้น</p></section>
+ {!room.session||!room.game?<section className="dictionary-message"><BookOpen size={36}/><h2>เปิดคลังคำไปกับวงของคุณ</h2><p>{room.session?'กำลังตรวจสมาชิกห้อง…':'เข้าห้องเกมเพื่อค้นหาและร่วมแก้ไขคำศัพท์กับเพื่อน'}</p><a className="button primary" href="/">กลับไปเข้าห้อง <ArrowRight size={17}/></a>{room.error&&<p role="alert">{room.error}</p>}</section>:<>
+ <form className="dictionary-search" role="search" onSubmit={e=>{e.preventDefault();void load(query.trim());}}><Search size={23} aria-hidden="true"/><label className="sr-only" htmlFor="dictionary-search">ค้นหาคำศัพท์</label><input id="dictionary-search" value={query} onChange={e=>setQuery(e.target.value)} maxLength={200} placeholder="พิมพ์คำที่อยากค้นหา เช่น มหาสมุทร"/><button type="submit" className="button primary" disabled={loading}>{loading?<LoaderCircle className="spin" size={18}/>:<Search size={18}/>} ค้นหา</button></form>
+ <div className="dictionary-membership"><span>ห้อง <strong>{code}</strong> · {room.game.players.find(p=>p.id===room.game?.youId)?.name}</span><span>ผู้เล่นในห้องร่วมแก้ไขได้ · เวลาของเกมยังเดิน</span></div>
+ {notice&&<p className="dictionary-notice" role="status"><CheckCircle2 size={18}/>{notice}</p>}{error&&<p className="inline-error" role="alert">{error}</p>}
+ <div className="dictionary-layout"><aside className="dictionary-list" aria-label="รายการคำศัพท์"><div className="dictionary-list-heading"><h2>{activeQuery?'ผลการค้นหา':'สำรวจคลังคำ'}</h2><span aria-live="polite">{loading?'กำลังค้นหา…':`${items.length}${cursor?'+':''} คำ`}</span></div>{activeQuery&&<p className="dictionary-query">คำที่มี “{activeQuery}”</p>}
+ <div className="dictionary-rows" aria-busy={loading}>{items.map(entry=><button type="button" key={entry.word} aria-pressed={selected?.word===entry.word} className={`dictionary-row ${selected?.word===entry.word?'selected':''}`} onClick={()=>{setSelected(entry);setNotice('');}}><span className="dictionary-row-title"><strong>{entry.word}</strong><ArrowRight size={16}/></span><span>{entry.analysis.syllables.join(' · ')}</span><small>{categoryLabel[entry.analysis.category]}{entry.source==='players'&&<CheckCircle2 size={13} aria-label="ผู้เล่นยืนยันแล้ว"/>}</small></button>)}</div>
+ {!loading&&!items.length&&<div className="dictionary-empty"><Search size={25}/><p>ไม่พบคำนี้ในคลัง</p><small>ลองใช้บางส่วนของคำ หรือคำสะกดอื่น</small></div>}{cursor&&<button className="dictionary-more" type="button" disabled={loading} onClick={()=>void load(activeQuery,cursor,true)}>ดูคำถัดไป <ArrowRight size={16}/></button>}
+ </aside><section className="dictionary-editor-panel" aria-label="รายละเอียดคำศัพท์" aria-busy={loading}>{selected?<DictionaryDefinition key={selected.word+':'+selected.updatedAt} entry={selected} onSave={save} onReload={()=>{setSelected(null);void load(activeQuery);}}/>:<div className="dictionary-empty dictionary-detail-empty"><BookOpen size={38}/><h2>ค้นพบคำในวงของเรา</h2><p>เลือกคำจากรายการเพื่ออ่านพยางค์และประเภทคำ</p><small>แสดงข้อมูลที่บันทึกไว้ในคลัง การค้นหาจะไม่เรียกโมเดล</small></div>}</section></div>
+ <footer className="dictionary-footnote"><BookOpen size={17}/><p>คลังคำสำหรับกติกาเกมคำต้องเชื่อม · การแก้ไขใช้กับคำที่ส่งครั้งถัดไป และเก็บประวัติผู้แก้ทุกครั้ง</p></footer></>}
  </main></div>;
 }
+function DictionaryDefinition({entry,onSave,onReload}:{entry:DictionaryEntry;onSave:(entry:DictionaryEntry,word:string,analysis:WordAnalysis)=>Promise<void>;onReload:()=>void}){
+ const [editing,setEditing]=useState(false),a=entry.analysis;
+ return <article className="dictionary-definition"><div className="dictionary-entry-top"><span className={`dictionary-source ${entry.source==='players'?'confirmed':''}`}>{entry.source==='players'?<CheckCircle2 size={14}/>:<BookOpen size={14}/>} {entry.source==='players'?'ผู้เล่นยืนยัน':'โมเดลวิเคราะห์'}</span><button type="button" className="text-button" onClick={()=>setEditing(!editing)}>{editing?<X size={15}/>:<Pencil size={15}/>} {editing?'ปิดการแก้ไข':'แก้ไขคำศัพท์'}</button></div>
+ <h2 className="dictionary-headword">{entry.word}</h2><div className="dictionary-part-of-speech"><strong>{categoryLabel[a.category]}</strong>{a.category==='noun'&&<span>{nounLabel[a.nounType]}</span>}<span className={`dictionary-decision ${a.category==='noun'?'accepted':''}`}>{a.category==='noun'?'ใช้ในเกมได้':a.category==='uncertain'?'รอผู้เล่นตรวจทาน':'ไม่ผ่านกติกาคำนาม'}</span></div>
+ <section className="dictionary-reading"><h3>การแบ่งพยางค์ <span>{a.syllables.length} พยางค์</span></h3><p>{a.syllables.map((part,i)=><span key={i}>{i>0&&<i aria-hidden="true">/</i>}<b>{part}</b></span>)}</p><small>คงรูปสะกดเดิม ไม่เติมสระที่แฝงในเสียงอ่าน</small></section>
+ <section className="dictionary-explanation"><h3>คำอธิบายการจัดประเภท</h3><p>{a.reason}</p>{a.titleContext&&<div className="dictionary-context"><strong>ข้อมูลประกอบชื่อผลงาน</strong><p>{a.titleContext}</p></div>}{a.suggestions.length>0&&<div className="dictionary-suggestions"><strong>รูปคำที่แนะนำ</strong><p>{a.suggestions.join(' · ')}</p></div>}</section>
+ <div className="dictionary-provenance"><span>{entry.source==='players'?'ข้อมูลที่ผู้เล่นช่วยตรวจทาน':'ผลวิเคราะห์อัตโนมัติ อาจมีข้อผิดพลาด'}</span><time dateTime={new Date(entry.updatedAt).toISOString()}>อัปเดต {new Date(entry.updatedAt).toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'})}</time></div>
+ {editing&&<div className="dictionary-edit-area"><WordEditor entry={entry} onSave={onSave} onReload={onReload}/></div>}</article>;
+}
+
 function WordEditor({entry,onSave,onReload}:{entry:DictionaryEntry;onSave:(entry:DictionaryEntry,word:string,analysis:WordAnalysis)=>Promise<void>;onReload:()=>void}){
  const [word,setWord]=useState(entry.word),[chunks,setChunks]=useState(entry.analysis.syllables.join(' / ')),[category,setCategory]=useState(entry.analysis.category),[nounType,setNounType]=useState(entry.analysis.nounType),[reason,setReason]=useState(entry.analysis.reason),[suggestions,setSuggestions]=useState(entry.analysis.suggestions.join(' / ')),[titleContext,setTitleContext]=useState(entry.analysis.titleContext),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const lock=useRef(false);

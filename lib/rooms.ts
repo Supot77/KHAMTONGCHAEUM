@@ -288,7 +288,11 @@ export class RoomService {
             if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id)return;
             for(const word of roundWords(game))if(claimed.words.some(w=>w.id===word.id)&&!word.analysis)word.analysisSource=freshWords.includes(word.text)?'model':'database';
             applyAnalyses(game,claimed.roundId,claimed.words.filter(w=>Object.hasOwn(entries,w.text)).map(w=>({id:w.id,analysis:entries[w.text]})),this.clock());
-            game.lease=null;game.aiError=null;game.nextCheckAt=this.clock()+(words.some(w=>!Object.hasOwn(entries,w))?1000:4000);
+            const unresolved=words.filter(w=>!Object.hasOwn(entries,w));
+            game.lease=null;
+            game.aiError=unresolved.length?`รับผลคำที่ผ่านแล้ว ยังรอตรวจอีก ${unresolved.length} คำ จะลองใหม่เฉพาะคำที่ยังไม่มีผล`:null;
+            game.nextCheckAt=this.clock()+(unresolved.length?15000:4000);
+            for(const word of roundWords(game))if(claimed.words.some(w=>w.id===word.id)&&!word.analysis&&!word.manual){word.check='error';word.languageStatus='error';}
           });
         }finally{await this.store.releaseAnalyses(owned,claimed.id);}
 

@@ -25,12 +25,16 @@ export function parseSegments(words:string[],value:unknown):Record<string,string
 }
 export function parseAnalyses(words:string[],value:unknown):Record<string,WordAnalysis> {
   const items=(value as {items?:unknown})?.items;
-  if(!Array.isArray(items)||items.length!==words.length)throw new AiError('ผลวิเคราะห์คำไม่ครบ กรุณาลองใหม่');
+  if(!Array.isArray(items))throw new AiError('ผลวิเคราะห์คำไม่ครบ กรุณาลองใหม่');
   const result:Record<string,WordAnalysis>={};
-  for(const item of items){
-    if(!item||typeof item.word!=='string'||!words.includes(item.word)||Object.hasOwn(result,item.word))throw new AiError('รูปแบบผลวิเคราะห์ไม่ถูกต้อง');
-    result[item.word]=validateAnalysis(item.word,item);
+  // Treat each exact requested spelling independently. Duplicate answers are ambiguous;
+  // never guess which one is authoritative or let one malformed row discard its peers.
+  for(const word of new Set(words)){
+    const matches=items.filter(item=>item&&typeof item==='object'&&item.word===word);
+    if(matches.length!==1)continue;
+    try{result[word]=validateAnalysis(word,matches[0]);}catch{/* Retry only this word. */}
   }
+  if(!Object.keys(result).length)throw new AiError('ผลวิเคราะห์ยังไม่มีคำที่ผ่านการตรวจรูปสะกด กรุณาลองใหม่');
   return result;
 }
 export function createProvider(key:string|undefined,model=DEFAULT_MODEL,fetcher:typeof fetch=fetch):LanguageProvider {

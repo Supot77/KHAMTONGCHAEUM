@@ -1,3 +1,15 @@
+# Partial word results and dictionary reading layout — 2026-10-21
+
+Changed lib/gemini.ts, lib/rooms.ts, app/components/dictionary-page.tsx, app/globals.css, tests/partial-analysis.test.mjs, package.json and relevant docs. Valid model results now survive invalid peers, only unresolved spellings are retried after a 15-second cooldown, and shared dictionary entries open in a readable search/index/detail view with an explicit edit action. No schema, environment, provider choice or production dictionary data changed.
+
+Related tests only: `node --experimental-strip-types --test tests/partial-analysis.test.mjs tests/dictionary.test.mjs tests/pipeline.test.mjs` passed 34/34. This covers invalid/missing/duplicate/unsolicited responses, persistence of valid peers, cooldown and retry subset, cache-first duplicate verdicts, membership, audit, conflicts and human correction protection. No full-suite run.
+
+`npm run build` compiled, passed TypeScript and generated all 8 pages. Replaying the previously recorded real Gemini 3.5 Flash-Lite outputs changed 0/3 accepted batches to 3/3 with 32 accepted words; only มหาวิทยาลัย, จรวด, โรงพยาบาล and บุพเพสันนิวาส remained unresolved. Replay made zero new model calls and zero database writes.
+
+Browser QA used only the existing isolated Neon QA branch via localhost:5174. Search selected มหาสมุทร, entry view displayed ม / หา / ส / มุทร and player provenance, invalid มะ / หา / ส / มุทร was rejected, and valid segmentation saved successfully and closed the editor. A 390px mobile viewport had no horizontal document overflow; a cramped membership line was adjusted to stack vertically. Desktop/mobile screenshots are saved in this task's outputs. Production deployment has not been verified.
+
+---
+
 # Room departure, fine Thai reading policy and shared dictionary editor — 2026-10-21
 
 Online leave removes the member and revokes the old session; ownership passes to the earliest remaining member. Active departures eliminate once and retain the five-second continuation or finish the set. Spectator departures preserve the current clock; pending sends and debates recover safely. Empty rooms and shared-device rooms are deleted with a revision guard. Only departed ID/name are retained for historical word evidence, with no departed token hash.
