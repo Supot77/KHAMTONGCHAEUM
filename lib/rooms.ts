@@ -2,7 +2,7 @@ import { RoomUnavailableError } from './room-lifecycle.ts';
 import { advanceChallenge,openChallenge,debate,castVote,resolveChallenge } from './challenge.ts';
 import { validateAnalysis } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
-import { createGame, startRound, submitWord, skipTurn, advanceTimeout, advanceContinuation, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, analysisCandidates, requiresVerification, roundWords, rollback, resolveManually, appealReset } from './game.ts';
+import { createGame, reserveSubmission, releaseSubmission, expireSubmission, startRound, submitWord, skipTurn, advanceTimeout, advanceContinuation, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, analysisCandidates, requiresVerification, roundWords, rollback, resolveManually, appealReset } from './game.ts';
 import type { Game } from './game.ts';
 import { AiError } from './gemini.ts';
 import type { LanguageProvider } from './gemini.ts';
@@ -56,13 +56,13 @@ export class RoomService {
       let row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
       const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้ กรุณาเข้าห้องอีกครั้ง');
       if(command.action==='heartbeat'&&!await this.store.touch(code,now))throw new RoomUnavailableError();
-      if((row.game.continuation&&now>=row.game.continuation.at)||(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline)))){const updated=await this.mutate(code,g=>{advanceContinuation(g,now);advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
+      if((row.game.submission&&now>=row.game.submission.until)||(row.game.continuation&&now>=row.game.continuation.at)||(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline)))){const updated=await this.mutate(code,g=>{advanceContinuation(g,now);advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
       return publicGame(row.game,row.revision,player.id,now);
     }
     if(typeof command.commandId!=='string'||command.commandId.length<8||command.commandId.length>80)throw new Error('ไม่พบรหัสคำสั่ง กรุณาลองอีกครั้ง');
     if(command.action==='confirmReview')return this.confirmReview(code,hash,command);
+    if(command.action==='submit')return this.submitCommand(code,hash,command);
     // Cache hits are independent of model readiness, cooldown and in-flight jobs.
-    let cached:WordAnalysis|undefined;
     let opening:{text:string;analysis:WordAnalysis}|null=null;
     let openingRoundId:string|undefined;
     if(command.action==='start'&&command.manual!==true){
@@ -72,12 +72,9 @@ export class RoomService {
       openingRoundId=row.game.roundId;
       opening=await this.store.randomNoun();if(!opening)throw new Error('ฐานคำยังไม่มีคำนามที่ใช้ได้ เลือกให้ผู้เล่นตั้งคำแรกหรือเพิ่มคำนามในฐานก่อน');
     }
-    if(command.action==='submit'){
-      const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
-      if(!row.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
-      if(!row.game.manual){const text=validateWord(command.text);cached=(await this.store.analyses(this.provider.model,[text]))[text];}
-    }
     const updated=await this.mutate(code,game=>{
+      expireSubmission(game,now);
+      if(game.submission&&['pass','challenge','accept','reject','appeal'].includes(command.action))throw new Error('กำลังส่งคำ กรุณารอผลก่อน');
       let player=game.players.find(p=>p.tokenHash===hash);
       if(command.action==='join'){
         if(player)return player.id;
@@ -100,7 +97,6 @@ export class RoomService {
       if(command.action==='vote')castVote(game,actor,command.connected,now);
       if(['start','retry','end','reject','accept','appeal','lobby','confirmReview'].includes(command.action)&&!host)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
       if(['reject','accept'].includes(command.action)){const word=game.chain.find(w=>w.id===command.wordId);if((word?.phaseId&&word.phaseId!==game.roundId)||(word?.playerId&&game.competition&&!game.competition.activeIds.includes(word.playerId)))throw new Error('คำจากช่วงก่อนหน้าให้ตรวจทานตอนจบเซ็ต');}
-      if(command.action==='submit'){const word=submitWord(game,player.id,command.text,now,Number(command.turn));if(cached&&!game.manual){word.analysisSource='database';applyAnalyses(game,game.roundId,[{id:word.id,analysis:cached}],now);}}
       if(command.action==='pass')skipTurn(game,player.id,now,Number(command.turn));
       if(command.action==='start'){
         if(openingRoundId&&game.roundId!==openingRoundId)throw new Error('การเริ่มเกมถูกยกเลิกหรือห้องเปลี่ยนแล้ว');
@@ -111,8 +107,8 @@ export class RoomService {
         else {startRound(game,{text:opening!.text,syllables:opening!.analysis.syllables},now);game.chain[0].analysis=opening!.analysis;game.chain[0].analysisSource='database';}
       }
       if(command.action==='retry'){game.aiError=null;game.nextCheckAt=0;for(const w of roundWords(game))if(w.check==='error')w.check='pending';}
-      if(command.action==='end'){if(game.status!=='playing')throw new Error('ยังไม่ได้เริ่มเล่น');if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase)){game.challenge.phase='cancelled';game.challenge.deadline=null;}game.status='ended';game.deadline=null;}
-      if(command.action==='lobby'){if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))game.challenge.phase='cancelled';game.roundId=crypto.randomUUID();game.status='lobby';game.deadline=null;game.lease=null;game.aiError=null;game.nextCheckAt=0;}
+      if(command.action==='end'){game.submission=null;if(game.status!=='playing')throw new Error('ยังไม่ได้เริ่มเล่น');if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase)){game.challenge.phase='cancelled';game.challenge.deadline=null;}game.status='ended';game.deadline=null;}
+      if(command.action==='lobby'){game.submission=null;if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))game.challenge.phase='cancelled';game.roundId=crypto.randomUUID();game.status='lobby';game.deadline=null;game.lease=null;game.aiError=null;game.nextCheckAt=0;}
       if(command.action==='reject'){if(game.status!=='playing')throw new Error('รอบนี้จบแล้ว');if(!game.chain.some(w=>w.id===command.wordId&&w.playerId))throw new Error('ไม่พบคำที่ต้องการยกเลิก');rollback(game,String(command.wordId),'human',[],now);}
       if(command.action==='accept'){if(game.status!=='playing')throw new Error('รอบนี้จบแล้ว');resolveManually(game,String(command.wordId),now,Array.isArray(command.syllables)?command.syllables as string[]:undefined);}
       if(command.action==='appeal'){if(game.status!=='playing')throw new Error('รอบนี้จบแล้ว ให้ตรวจทานฐานคำแทน');appealReset(game,String(command.eventId),now);}
@@ -127,6 +123,36 @@ export class RoomService {
     });
     if(!await this.store.touch(code,now))throw new RoomUnavailableError();
     return publicGame(updated.game,updated.revision,updated.value,now);
+  }
+  async submitCommand(code:string,hash:string,command:Command){
+    const id=command.commandId!,text=validateWord(command.text),turn=Number(command.turn),receivedAt=this.clock();
+    const claimed=await this.mutate(code,game=>{
+      const player=game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
+      if(!game.processed.includes(id))reserveSubmission(game,player.id,text,turn,id,receivedAt);
+      return player.id;
+    });
+    if(claimed.game.processed.includes(id))return publicGame(claimed.game,claimed.revision,claimed.value,this.clock());
+    const reservationUntil=claimed.game.submission!.until;
+    try{
+      const cached=claimed.game.manual?undefined:(await this.store.analyses(this.provider.model,[text]))[text];
+      if(!await this.store.touch(code,this.clock()))throw new RoomUnavailableError();
+      const saved=await this.mutate(code,game=>{
+        const player=game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
+        if(game.processed.includes(id))return player.id;
+        const completedAt=this.clock();expireSubmission(game,completedAt);
+        const pending=game.submission;
+        if(!pending||pending.id!==id||pending.actorId!==player.id||pending.turn!==turn||pending.roundId!==game.roundId||pending.text!==text||pending.until!==reservationUntil)throw new Error('คำขอส่งหมดอายุหรือตาเปลี่ยนแล้ว กรุณาตรวจสถานะล่าสุด');
+        game.submission=null;
+        const word=submitWord(game,player.id,text,completedAt,turn);
+        if(cached&&!game.manual){word.analysisSource='database';applyAnalyses(game,game.roundId,[{id:word.id,analysis:cached}],completedAt);}
+        game.processed=[...game.processed,id].slice(-300);return player.id;
+      });
+      return publicGame(saved.game,saved.revision,saved.value,this.clock());
+    }catch(error){
+      // Release only our reservation. A lost connection may already have committed it.
+      try{await this.mutate(code,game=>{if(game.submission?.until===reservationUntil&&game.submission.roundId===claimed.game.roundId)releaseSubmission(game,id,this.clock());});}catch{/* The bounded lease recovers if the database is unavailable. */}
+      throw error;
+    }
   }
   async hydrateCached(code:string,hash:string){
     const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();

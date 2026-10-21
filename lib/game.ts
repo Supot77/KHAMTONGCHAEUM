@@ -10,7 +10,10 @@ export type Word = { id: string; playNumber?:number; phaseId?:string; text: stri
 export type ResetEvent = { id: string; duplicateKind?:'word'|'syllable';turn?:number;previousTurn?:number;previousPlayerId?:string|null;previousPlayerName?:string;resumeId?:string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
 export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; model?:string; status?:'draft'|'checking'|'answered'|'error'|'confirming'|'approved'; requestId?:string; leaseUntil?:number; response?:{verdict:'agree'|'revise'|'uncertain';analysis:WordAnalysis;reason:string}; error?:string; approvedId?:string; approvedAnalysis?:WordAnalysis};
 export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge';at:number};
+export const SUBMISSION_GRACE_MS=3000;
+export const SUBMISSION_LEASE_MS=35000;
 export type Game = {
+  submission?:{id:string;actorId:string;playerId:string;turn:number;roundId:string;text:string;remainingMs:number|null;until:number}|null;
   setsPerRound?:3|5;
   continuation?:{at:number;starterId:string;anchorId:string;word:string;loserId:string}|null;
   releasedWords?:{text:string;playerName:string}[];
@@ -57,22 +60,49 @@ export function startRound(game:Game,seed:{text:string;syllables:string[]},now=D
   const previous=roundWords(game);const sameSet=Boolean(game.competition&&!game.competition.setComplete);
   prepareCompetition(game);
   if(sameSet)game.archiveWords=previous;
-  game.roundNumber=game.competition!.round;game.result=null;game.challenge=null;game.continuation=null;game.releasedWords=[];
+  game.roundNumber=game.competition!.round;game.submission=null;game.result=null;game.challenge=null;game.continuation=null;game.releasedWords=[];
   game.roundId=crypto.randomUUID(); game.chain=[{id:crypto.randomUUID(),text,playNumber:0,playerId:null,previousId:null,syllables,check:'valid',at:now}];
   game.events=[]; game.turnIndex=nextActiveIndex(game,-1); game.turnNumber++; game.deadline=deadline(game,now); game.status='playing'; game.aiError=null;game.lease=null;game.nextCheckAt=0;game.notice=null;
 }
 export function advanceTimeout(game:Game,now=Date.now()):boolean {
-  if(game.status!=='playing'||(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))||game.deadline===null||now<game.deadline) return false;
+  expireSubmission(game,now);
+  if(game.submission)return false;
+  if(game.status!=='playing'||(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))||game.deadline===null||now<game.deadline+SUBMISSION_GRACE_MS) return false;
   finishRound(game,game.players[game.turnIndex].id,'timeout',now);
   game.notice=`${game.players[game.turnIndex].name} หมดเวลา — ตกรอบจากเซ็ตนี้`;return true;
 }
-export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:number) {
+export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:number,graceMs=0) {
   if(game.status!=='playing') throw new Error('รอให้เริ่มเกมก่อน');
   if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))throw new Error('กำลังชาเลนจ์ รอผลก่อนต่อคำ');
-  if(game.deadline!==null&&now>=game.deadline) throw new Error('หมดเวลาแล้ว รออัปเดตตาปัจจุบัน');
+  if(game.submission)throw new Error('กำลังส่งคำ กรุณารอผลก่อน');
+  if(game.deadline!==null&&now>=game.deadline+graceMs) throw new Error('หมดเวลาแล้ว รออัปเดตตาปัจจุบัน');
   if(expectedTurn!==game.turnNumber) throw new Error('ตาเปลี่ยนแล้ว กรุณาส่งคำอีกครั้ง');
   if(game.mode==='online'&&game.players[game.turnIndex].id!==actorId) throw new Error('ยังไม่ถึงตาของคุณ');
   if(game.mode==='shared'&&actorId!==game.hostId) throw new Error('ใช้เครื่องที่สร้างเกมเพื่อส่งคำ');
+}
+export function expireSubmission(game:Game,now:number):boolean {
+  const pending=game.submission;if(!pending||now<pending.until)return false;
+  game.submission=null;
+  if(game.status==='playing'&&game.roundId===pending.roundId&&game.turnNumber===pending.turn)game.deadline=pending.remainingMs===null?null:pending.until+pending.remainingMs;
+  return true;
+}
+export function reserveSubmission(game:Game,actorId:string,text:string,turn:number,id:string,now:number){
+  expireSubmission(game,now);
+  const existing=game.submission;
+  if(existing){
+    if(existing.id===id&&existing.actorId===actorId&&existing.turn===turn&&existing.text===text)return;
+    throw new Error('กำลังส่งคำ กรุณารอผลก่อน');
+  }
+  assertTurn(game,actorId,turn,now,SUBMISSION_GRACE_MS);
+  if(game.chain.length>=1000)throw new Error('ครบ 1,000 คำแล้ว ให้เจ้าของห้องพักตรวจคำ');
+  game.submission={id,actorId,playerId:game.players[game.turnIndex].id,turn,roundId:game.roundId,text,remainingMs:game.deadline===null?null:Math.max(0,game.deadline-now),until:now+SUBMISSION_LEASE_MS};
+  game.deadline=null;
+}
+export function releaseSubmission(game:Game,id:string,now:number){
+  expireSubmission(game,now);
+  const pending=game.submission;if(!pending||pending.id!==id)return;
+  game.submission=null;
+  if(game.status==='playing'&&game.roundId===pending.roundId&&game.turnNumber===pending.turn)game.deadline=pending.remainingMs===null?null:now+pending.remainingMs;
 }
 export function submitWord(game:Game,actorId:string,input:unknown,now:number,expectedTurn:number):Word {
   assertTurn(game,actorId,expectedTurn,now);const text=validateWord(input);
@@ -143,11 +173,11 @@ export function scoreboard(game:Game) {
   return game.players.map(p=>({id:p.id,name:p.name,score:game.competition?.totals[p.id]??0,setScore:game.competition?.setPoints[p.id]??0,roundScore:game.competition?.roundPoints[p.id]??0,active:activeIds(game).includes(p.id),pending:game.chain.filter(w=>w.playerId===p.id&&w.check!=='valid').length}));
 }
 export function publicGame(game:Game,revision:number,youId:string,now=Date.now()) {
-  const {processed,lease,players,archiveWords,...safe}=game;
+  const {processed,lease,players,archiveWords,submission,...safe}=game;
   const reviewing=game.status==='ended'&&!game.continuation;
   const challenge=game.challenge;
   const publicChallenge=challenge?(({votes,...rest})=>({...rest,votesCast:Object.keys(votes).length,votedIds:Object.keys(votes),youVote:votes[youId]??null, tally:['resolved','judging'].includes(challenge.phase)?{yes:Object.values(votes).filter(Boolean).length,no:Object.values(votes).filter(v=>!v).length}:null}))(challenge):null;
-  return {...safe,challenge:publicChallenge,reviews:reviewing?game.reviews??{}:{},chain:['playing','ended'].includes(game.status)?game.chain.slice(-1):[],wordCount:Math.max(0,game.chain.length-1),needsCheck:['playing','ended'].includes(game.status)&&(analysisCandidates(game).some(needsAnalysis)||requiresVerification(game)),reviewWords:reviewing?roundWords(game):[],events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:reviewing?roundWords(game).filter(needsAnalysis).length:game.chain.filter(w=>w.check!=='valid').length};
+  return {...safe,submission:submission?{playerId:submission.playerId,turn:submission.turn,remainingMs:submission.remainingMs,until:submission.until}:null,challenge:publicChallenge,reviews:reviewing?game.reviews??{}:{},chain:['playing','ended'].includes(game.status)?game.chain.slice(-1):[],wordCount:Math.max(0,game.chain.length-1),needsCheck:['playing','ended'].includes(game.status)&&(analysisCandidates(game).some(needsAnalysis)||requiresVerification(game)),reviewWords:reviewing?roundWords(game):[],events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:reviewing?roundWords(game).filter(needsAnalysis).length:game.chain.filter(w=>w.check!=='valid').length};
 }
 export type PublicGame = ReturnType<typeof publicGame>;
 
@@ -166,7 +196,7 @@ export function finishRound(game:Game,loserId:string,reason:RoundResult['reason'
   if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase)){game.challenge.phase='cancelled';game.challenge.deadline=null;}
   if(!game.competition)prepareCompetition(game);
   eliminate(game,loserId);
-  game.result={loserId,reason,at:now};game.status='ended';game.deadline=null;game.turnNumber++;
+  game.submission=null;game.result={loserId,reason,at:now};game.status='ended';game.deadline=null;game.turnNumber++;
   game.continuation=null;
   if(!game.competition!.setComplete){
     const rejected=reason==='challenge'&&game.challenge?.result?.connected===false?game.challenge.wordId:null;

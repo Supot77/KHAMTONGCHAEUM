@@ -1,3 +1,21 @@
+# Pause clocks during word submission — 2026-10-21
+
+The UI freezes its displayed time at send, displays a spinner/pending state and prevents double submission. The server persists a bounded reservation before dictionary lookup. Other players' reads cannot time out this reserved turn. Final commit uses the current server clock for the next player's full turn budget. Lookup failures restore the reserved remainder; transport retries reuse commandId. A 3-second server receipt grace absorbs short network delay near zero; no client-supplied click timestamp is trusted. Abandoned reservations recover after 35 seconds, and late results cannot revive cancelled/ended turns. Model analysis stays asynchronous and does not pause play.
+
+Changed: lib/game.ts, lib/rooms.ts, board and send hook, rules, package test scripts, tests/submission-clock.test.mjs, README and word-checking documentation. Pending public state excludes the submitted text and internal request ID. No schema, environment, dictionary or production data changes.
+
+Only related tests were run for this change:
+- npm run test:submission: 11 passed, 0 failed. SQLite-backed service tests cover both modes, delayed dictionary reads crossing the original deadline, full next-turn budgets, failure/refund/retry, grace boundaries, overlapping identical retries, foreign commands, stale leases, cancellation, untimed games and invalid submissions.
+- Six selected existing regressions passed: expired submission, concurrent/authorized turn submission, stable command IDs and three cached/asynchronous word-check pipeline cases.
+- Three selected full-word duplicate regressions passed, including both modes through the SQL store.
+- npm run build passed compilation, TypeScript and all six pages. A stale expired request also cannot commit or release a newly reserved request reusing its old ID. No full-suite run.
+
+Browser QA used the isolated Neon branch through a local-only proxy delaying submit requests by 2 seconds. The UI displayed a frozen 15-second clock and “พักเวลา กำลังส่งคำ” while retaining the old word; after success it showed เหล็ก and the next player. Screenshots: submission-clock-paused.png and submission-clock-success.png in task outputs. The exact near-zero acceptance boundary and slow server processing were proved with controlled clocks in service tests. The first browser attempt to wait for the 2-second label missed its interaction window and timed out without submitting; this is not counted as a successful near-zero browser test. Proxy Origin forwarding was corrected without changing application Origin validation. No model calls were requested by browser QA.
+
+The existing pg SSL future-compatibility advisory remains. Vercel production deployment is not verified.
+
+---
+
 # Selectable round length and exact-word history check — 2026-10-21
 
 Current change: choose 3 or 5 separate sets per round at room creation. The server rejects other values; existing rooms default to five. Each set clears its live word/reset/review history, returns all players and starts a fresh seed. Set scores aggregate into round scores, then round points reset when the next round starts; room totals persist. The final board displays the round winner or tied winners.

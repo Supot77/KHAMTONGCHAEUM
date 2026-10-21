@@ -61,7 +61,7 @@ export function useRoom(){
         }
       }
       accept(next);return true;
-    }catch(e){if(e instanceof RoomUnavailableError&&current.current?.code===s.code)resetSession(e.message);else {setError(e instanceof Error?e.message:'ส่งคำไม่ได้');void refresh();}return false;}finally{setBusy(false);}
+    }catch(e){if(e instanceof RoomUnavailableError&&current.current?.code===s.code)resetSession(e.message);else {setError(e instanceof Error?e.message:'ส่งคำไม่ได้');await refresh();}return false;}finally{setBusy(false);}
   },[accept,refresh,resetSession]);
   const leave=()=>resetSession();
   return {session,game,provider,busy,error,connectionError,connect,send,leave,refresh,refreshProvider,setError};
