@@ -32,7 +32,7 @@ function ReviewWord({word,proposal,isHost,busy,send,now}:{word:Word;proposal?:Re
     <p className="review-verification">{verificationLabel(word)}{word.verification?.repeated.length?` · ซ้ำ ${word.verification.repeated.join(' / ')}`:''}{word.verification&&['duplicate','not_noun'].includes(word.verification.status)&&!word.verification.applied?' · ผลย้อนหลัง ไม่เปลี่ยนผู้แพ้หรือคะแนน':''}</p>
     {word.analysis&&<p className="muted">ข้อมูลเดิม: {word.analysis.syllables.join(' / ')} · {choices.find(([value])=>value===`${word.analysis?.category}:${word.analysis?.nounType}`)?.[1]} · {word.analysis.reason}</p>}
     <form onSubmit={propose} onChange={()=>{dirty.current=true;}} className="review-form">
-      <label className="field-label">แบ่งพยางค์ด้วย /<input value={syllables} onChange={e=>setSyllables(e.target.value)} maxLength={700} required/></label>
+      <label className="field-label">แบ่งหน่วยเสียงด้วย /<input value={syllables} onChange={e=>setSyllables(e.target.value)} maxLength={700} required/></label>
       <label className="field-label">ประเภทคำ<select value={kind} onChange={e=>setKind(e.target.value)}>{choices.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
       {['noun:song','noun:movie','noun:series'].includes(kind)&&<label className="field-label">ศิลปิน / ผู้สร้าง / ข้อมูลผลงาน<input value={context} onChange={e=>setContext(e.target.value)} maxLength={300} required/></label>}
       <label className="field-label">เหตุผล / หมายเหตุ<input value={note} onChange={e=>setNote(e.target.value)} maxLength={500}/></label>

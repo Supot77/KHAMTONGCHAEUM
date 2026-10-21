@@ -164,3 +164,16 @@ The UI visibly waits (55-second client timeout, 45-second provider timeout, 60-s
 The list action is public: search, pagination, totals and entry details work without a room or session, and expired/stale room credentials do not block reading. The public path performs no room lookup, model call, dictionary write or room heartbeat. It returns the same dictionary view, including review warnings, without room or audit records.
 
 The page loads the word index independently of session restoration. Current membership controls the editor affordance; visitors see a link to enter a room for editing/AI help. Save and analyze still pass through server-side membership checks, and the existing save transaction recheck/version guard remains in place. Reading does not grant editing privileges.
+
+
+## V3 custom game sound units (2026-10-21)
+
+The `syllables` field now represents custom game sound units, not textbook syllables or individual letters. New analyses and player-request reviews use policy `thai-noun-titles-v3-game-sound-units`. Required examples: วิทยาศาสตร์ → วิท / ท / ยา / ศาสตร์; อวัยวะ → อ / วัย / ย / วะ. A separately voiced implicit-vowel beat may replay a single written Thai consonant from the end of the preceding unit. This is why simple concatenation is no longer the integrity rule.
+
+Written provenance validation still requires ordered coverage of the entire original spelling (ignoring only separators). It additionally permits a standalone Thai consonant to overlap the immediately preceding unit's final character, with no consecutive overlaps or extra overlap at the end of the word. It does not permit inserted vowels, phonetic rewriting, repeated marked syllables, invented letters or dropped marks. วัติ remains one unit: ประวัติศาสตร์ → ประ / วัติ / ศาสตร์, never ประ / วัติ / ติ / ศาสตร์. Silent letters stay attached to their written unit; consonant clusters read together are not split into every letter. This validator checks provenance, not linguistic truth; AI and player review still decide whether an extra beat is actually present.
+
+Comparison remains exact equality of written units: จันทร์ and จันทน์ are different, and ท and ทะ are different. Only adjacent-word unit comparisons use the new units; full-word duplicate checks still cover all active words in the current set. Duplicates inside one submitted word do not eliminate that player by themselves.
+
+No existing dictionary entry is automatically rewritten or sent to the model. Old policy entries are still reused, with a nonblocking rule-version notice in the public dictionary. Members can explicitly request AI reanalysis and save V3 units for future submissions. Existing scores/live historical facts are not recomputed. No schema migration is needed. The dictionary editor and end-of-set review now label these values as game sound units.
+
+Run the bounded live check with `node scripts/smoke-game-sound-units.mjs --allow-model-call`: one eight-word analysis request and one explicit correction request, no database writes. Most test cases are examples supplied in the prompt; this is a behavior smoke test, not an independent language-accuracy benchmark.

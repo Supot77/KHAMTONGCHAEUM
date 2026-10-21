@@ -33,8 +33,9 @@ test('late duplicate rolls back descendants, scores, restores culprit turn and r
   assert.throws(()=>send(r,'ท้องฟ้า',9000),/รอให้เริ่มเกม/);
 });
 test('only adjacent words count and replayed word IDs cannot receive stale results', () => {
-  const r=setup(); const fish=send(r,'ปลา'); const sky=send(r,'ท้องฟ้า'); const sea=send(r,'ทะเล');
-  applySegments(r,r.roundId,[{id:fish.id,syllables:['ปลา']},{id:sky.id,syllables:['ท้อง','ฟ้า']},{id:sea.id,syllables:['ทะ','เล']}],5000);
+  // Reusing the exact seed would now fail the independent whole-word rule first.
+  const r=setup(); const fish=send(r,'ปลา'); const sky=send(r,'ท้องฟ้า'); const sea=send(r,'ทะเลลึก');
+  applySegments(r,r.roundId,[{id:fish.id,syllables:['ปลา']},{id:sky.id,syllables:['ท้อง','ฟ้า']},{id:sea.id,syllables:['ทะ','เล','ลึก']}],5000);
   assert.equal(r.chain.length,4); assert.equal(r.chain.at(-1).check,'valid');
   rollback(r,sky.id,'human',[],6000);startRound(r,{text:'ทะเล',syllables:['ทะ','เล']},6500); const again=send(r,'ท้องฟ้า',7000);
   applySegments(r,r.roundId,[{id:sky.id,syllables:['ท้อง','ฟ้า']}],8000);
@@ -50,7 +51,7 @@ test('model cannot change spelling, drop marks or invent readings', () => {
   const r=setup(); const w=send(r,'จันทร์');
   assert.throws(()=>applySegments(r,r.roundId,[{id:w.id,syllables:['จัน']}],3000),/รูปเขียน/);
   assert.equal(w.check,'pending');
-  const invalid=send(r,'ทะเล');assert.throws(()=>applySegments(r,r.roundId,[{id:invalid.id,syllables:['ท','ะ','เล']}],3000),/รูปเขียน/);
+  const invalid=send(r,'ทะเลลึก');assert.throws(()=>applySegments(r,r.roundId,[{id:invalid.id,syllables:['ท','ะ','เล','ลึก']}],3000),/รูปเขียน/);
 });
 test('expired submissions fail; timeout ends the round with the current player losing', () => {
   const r=setup(); const turn=r.turnNumber;

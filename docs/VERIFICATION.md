@@ -1,3 +1,15 @@
+# V3 custom sound units and boundary-consonant overlaps — 2026-10-21
+
+Changed lib/game.ts provenance validation, lib/gemini.ts analysis/review instructions, lib/word-analysis.ts rule policy, dictionary and round-review labels, package test commands, related tests and the live smoke script. The model now receives the required วิท / ท / ยา / ศาสตร์ and อ / วัย / ย / วะ patterns, plus the explicit วัติ-without-ติ exception. Source spelling, cache-first behavior, exact written homophone distinction, human protection and past scores remain unchanged. Old dictionary entries get a nonblocking policy notice and can be reanalyzed manually; no automatic data rewrite or schema/env/provider change.
+
+Related validation: 47/47 tests passed across game-sound-units, dictionary, partial-analysis and pipeline. Five selected original game tests (homophones, adjacent words, spelling integrity, internal repeats, title separators) also passed: 52 total. Two older selected fixtures reused the exact seed and hit the newer whole-word rejection before reaching their intended segmentation assertions; their sample was changed to ทะเลลึก so they exercise those assertions. One new test initially called submitWord with an outdated signature; fixed before the final passing run. No full-suite run. Final build compiled successfully, passed TypeScript and generated all 8 pages.
+
+Actual Gemini 3.5 Flash-Lite smoke: the first two analysis batches matched 7/8; อาชีวศึกษา was rejected because it inserted วะ instead of preserving ว. A stronger implicit-vowel provenance self-check was added to the prompt. The final analysis matched all 8 expected arrays with category noun: วิทยาศาสตร์, อวัยวะ, ประวัติศาสตร์, วิทยาลัย, จิตวิทยา, มหาสมุทร, วิทยานิพนธ์ and อาชีวศึกษา. The paired player-review request revised ประ / วัติ / ติ / ศาสตร์ into ประ / วัติ / ศาสตร์. Six live requests across the three iterations, zero database writes. These are prompt-conditioned smoke cases and do not establish universal reading accuracy.
+
+No production database data was edited. Production deployment not verified.
+
+---
+
 # Public dictionary reading without room membership — 2026-10-21
 
 Changed lib/dictionary-service.ts to serve list/search before authentication; app/components/dictionary-page.tsx now loads independently of sessions and gates only edit/AI controls. tests/dictionary.test.mjs now distinguishes public reading from protected mutations. No schema, credentials, model selection or production data changed.

@@ -42,7 +42,25 @@ export function validateName(input:unknown):string {
 }
 export function validateSyllables(word:string, value:unknown):string[] {
   const written=word.replace(/[^\p{L}\p{M}\p{N}]/gu,'');
-  if(!Array.isArray(value)||!value.length||value.length>160||value.some(s=>typeof s!=='string'||!s||s.length>200||!/^\p{L}[\p{L}\p{M}\p{N}]*$|^\p{N}+$/u.test(s)||(/^[\u0E00-\u0E7F]/.test(s)&&!/^[ก-ฮเแโใไ๐-๙]/.test(s)))||value.join('')!==written) throw new Error('ผลแบ่งพยางค์ไม่ตรงรูปเขียนเดิม กรุณาตรวจด้วยผู้เล่นหรือลองใหม่');
+  const invalid=()=>new Error('ผลแบ่งพยางค์ไม่ตรงรูปเขียนเดิม กรุณาตรวจด้วยผู้เล่นหรือลองใหม่');
+  if(!Array.isArray(value)||!value.length||value.length>160||value.some(s=>typeof s!=='string'||!s||s.length>200||!/^\p{L}[\p{L}\p{M}\p{N}]*$|^\p{N}+$/u.test(s)||(/^[\u0E00-\u0E7F]/.test(s)&&!/^[ก-ฮเแโใไ๐-๙]/.test(s))))throw invalid();
+  if(value.join('')!==written){
+    // Game sound units may replay ONE boundary consonant: วิท / ท / ยา.
+    // Everything else must consume the original spelling in order. No vowel
+    // insertion, phonetic rewriting, repeated marked syllable (วัติ / ติ),
+    // consecutive echoes or extra terminal echo. Reading correctness still
+    // belongs to the model/human reviewer; this checks written provenance only.
+    let states=[{offset:0,echo:false}];
+    for(let i=0;i<value.length;i++){
+      const part=value[i] as string,next=new Map<string,{offset:number;echo:boolean}>();
+      for(const state of states){
+        if(written.startsWith(part,state.offset))next.set(`${state.offset+part.length}:0`,{offset:state.offset+part.length,echo:false});
+        if(!state.echo&&i>0&&state.offset>0&&state.offset<written.length&&/^[ก-ฮ]$/u.test(part)&&value[i-1].endsWith(part)&&written[state.offset-1]===part)next.set(`${state.offset}:1`,{offset:state.offset,echo:true});
+      }
+      states=[...next.values()];if(!states.length)throw invalid();
+    }
+    if(!states.some(s=>s.offset===written.length&&!s.echo))throw invalid();
+  }
   return value as string[];
 }
 export function duplicates(previous:string[], current:string[]) { return [...new Set(current.filter(s=>previous.includes(s)))]; }

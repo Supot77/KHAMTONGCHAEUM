@@ -10,14 +10,15 @@
     "dev": "next dev --port 5173",
     "build": "next build",
     "start": "next start --port 5173",
-    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs tests/expiry.test.mjs tests/pipeline.test.mjs tests/continuation.test.mjs tests/rounds-duplicates.test.mjs tests/submission-clock.test.mjs tests/leave-room.test.mjs tests/dictionary.test.mjs tests/partial-analysis.test.mjs",
+    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs tests/expiry.test.mjs tests/pipeline.test.mjs tests/continuation.test.mjs tests/rounds-duplicates.test.mjs tests/submission-clock.test.mjs tests/leave-room.test.mjs tests/dictionary.test.mjs tests/partial-analysis.test.mjs tests/game-sound-units.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:setup": "node scripts/setup-db.mjs",
     "test:rounds": "node --experimental-strip-types --test tests/rounds-duplicates.test.mjs tests/continuation.test.mjs",
     "test:submission": "node --experimental-strip-types --test tests/submission-clock.test.mjs",
     "test:leave": "node --experimental-strip-types --test tests/leave-room.test.mjs",
     "test:dictionary": "node --experimental-strip-types --test tests/dictionary.test.mjs",
-    "test:analysis": "node --experimental-strip-types --test tests/partial-analysis.test.mjs tests/pipeline.test.mjs"
+    "test:analysis": "node --experimental-strip-types --test tests/partial-analysis.test.mjs tests/pipeline.test.mjs",
+    "test:sound-units": "node --experimental-strip-types --test tests/game-sound-units.test.mjs"
   },
   "dependencies": {
     "@neon/config": "^1.9.2",

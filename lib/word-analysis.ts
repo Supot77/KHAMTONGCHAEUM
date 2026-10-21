@@ -1,7 +1,7 @@
 import { validateSyllables } from './game.ts';
 
 // Change this when classification or spelling policy changes; old cache stays intact.
-export const ANALYSIS_POLICY = 'thai-noun-titles-v2-fine-syllables';
+export const ANALYSIS_POLICY = 'thai-noun-titles-v3-game-sound-units';
 export const CATEGORIES = ['noun','verb','adjective','adverb','sentence','phrase','other','uncertain'] as const;
 export const NOUN_TYPES = ['common','proper','nominalized','song','movie','series','none'] as const;
 export type WordAnalysis = {
