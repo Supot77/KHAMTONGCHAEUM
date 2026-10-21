@@ -1,3 +1,21 @@
+# Automatic set continuation and database openings — 2026-10-21
+
+Latest change: after an elimination with multiple survivors, a server-timed five-second overlay announces the next survivor and retains the last usable word. Any authenticated reader can advance it, with CAS preventing double starts. Old-phase results cannot eliminate again; pending tails are archived and released. Set winners still end their set. Initial nouns come from the dictionary, without a model call. No schema or environment-file changes.
+
+Changed areas: game/challenge/room state, SQL adapter and storage, Gemini seed removal, board/countdown/challenge/review components, styles, tests, smoke scripts and README/WORD-CHECKING documentation.
+
+Verification: npm test passed 73/73 tests with zero failures; npm run build compiled, passed TypeScript and generated all six pages. Real HTTP against the isolated Neon QA branch completed five sets and ten automatic continuations:
+
+```json
+{"sets":5,"automaticContinuations":10,"countdownMs":5000,"guestCanResume":"PASS","sameAnchor":"PASS","fullTurnBudget":"PASS","databaseOpenings":"PASS","modelCalls":0,"scores":[0,5,5,15],"result":"PASS"}
+```
+
+Browser QA: shared-device three-player room opened with database noun หน้า; surrender showed centered five-second countdown naming the next player and same anchor. Screenshot saved as automatic-continuation-countdown.png in the task outputs. Existing production data was not modified by this QA workflow. No Vercel production deployment URL was verified.
+
+Known separate gap: exact whole-word reuse after intervening turns is not checked across the live chain. Current syllable checks compare adjacent words only. Additional duplicate checking is proposed, not implemented by this change.
+
+---
+
 # Word verification pipeline — 2026-10-21
 
 This is the current report for the cache-first runtime and explicit model-review upgrade. Earlier reports below describe previous versions. The overnight set-4 incident cannot be conclusively reconstructed from the surviving evidence; the change addresses verified queue coupling, missing verdict visibility and incomplete five-set coverage rather than claiming a proven single root cause.

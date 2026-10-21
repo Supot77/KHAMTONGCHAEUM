@@ -49,7 +49,7 @@ function ReviewWord({word,proposal,isHost,busy,send,now}:{word:Word;proposal?:Re
   </details>;
 }
 export function RoundReview({game,busy,send}:{game:PublicGame;busy:boolean;send:SendCommand}){
-  if(game.status!=='ended')return null;
+  if(game.status!=='ended'||game.continuation)return null;
   return <section className="round-review" aria-labelledby="review-heading"><h2 id="review-heading">ช่วยกันตรวจคำของรอบนี้</h2><p>ส่งพยางค์ ประเภท และเหตุผลให้โมเดลตรวจ รออ่านคำตอบ แล้วเจ้าของห้องยืนยันจึงบันทึกฐานคำ มีผลกับครั้งต่อไป ผลการแข่งขันเดิมคงเดิม</p>
     <p className="muted">ผลจากโมเดลเป็นฉบับร่าง · ช่องว่างและเครื่องหมายไม่ใช้เทียบพยางค์ · คงตัวสะกดเดิม</p>
     {game.reviewWords.map(word=><ReviewWord key={word.id} word={word} proposal={game.reviews?.[word.id]} isHost={game.isHost} busy={busy} send={send} now={game.serverNow}/>)}

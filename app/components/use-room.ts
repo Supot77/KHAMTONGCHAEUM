@@ -32,7 +32,7 @@ export function useRoom(){
   },[refresh,refreshProvider]);
   useEffect(()=>{if(!session)return;const visible=()=>{if(document.visibilityState==='visible'){lastPresence.current=0;void refresh();}};document.addEventListener('visibilitychange',visible);const timer=setInterval(()=>{void refresh();},1000);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible);};},[session,refresh]);
   useEffect(()=>{
-    if(!game||!session||!provider?.configured||(game.manual&&game.challenge?.phase!=='judging')||checking.current)return;
+    if(!game||!session||(!provider?.configured&&game.status!=='starting')||(game.manual&&game.challenge?.phase!=='judging')||checking.current)return;
     if(game.status!=='starting'&&!game.needsCheck&&game.challenge?.phase!=='judging')return;
     if(game.serverNow<game.nextCheckAt)return;
     if(Date.now()-lastCheck.current<1500)return;

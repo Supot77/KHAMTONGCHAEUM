@@ -7,7 +7,7 @@ async function cmd(index,action,data={},expected=200){const response=await fetch
 let r=await cmd(0,'create',{mode:'online',name:'QA เซ็ต โฮสต์',seconds:30});code=r.code;
 for(let i=1;i<4;i++)await cmd(i,'join',{name:`QA เซ็ต คน ${i}`});
 r=await cmd(0,'start',{manual:true,text:'ทะเล'});const ids=r.players.map(p=>p.id);
-r=await cmd(0,'submit',{text:'ปลา',turn:r.turnNumber});const wordId=r.chain[0].id;
+r=await cmd(0,'submit',{text:'ปลา',turn:r.turnNumber});let wordId=r.chain[0].id;
 await cmd(1,'challenge',{wordId,turn:r.turnNumber,reason:'ลองตรวจความเชื่อมโยง'},400);
 r=await cmd(2,'challenge',{wordId,turn:r.turnNumber,reason:'ทดสอบระบบชาเลนจ์'});assert.equal(r.deadline,null);
 await cmd(1,'debate',{actorId:ids[0],text:'ปลาว่ายในทะเล',finish:true},400);
@@ -17,18 +17,19 @@ const voteCommand={action:'vote',code,challengeId,token:tokens[3],commandId:cryp
 const results=await Promise.all([fetch(base+'/api/room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(voteCommand)}),fetch(base+'/api/room',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(voteCommand)})]);
 for(const response of results)assert.equal(response.status,200);r=await cmd(0,'read');
 assert.equal(r.status,'ended');assert.equal(r.result.loserId,ids[0]);assert.equal(r.players[2].score,3);assert.equal(r.competition.activeIds.length,3);
-const analysis={syllables:['ปลา'],category:'noun',nounType:'common',reason:'QA ตรวจคำนามและรูปเขียน ปลา',suggestions:[],titleContext:''};
-const proposal=await cmd(1,'review',{wordId,analysis});assert.equal(proposal.reviews[wordId].approvedId,undefined);
-await cmd(1,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id},400);
-const reviewResponse=await fetch(base+'/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,token:tokens[1],wordId,proposalId:proposal.reviews[wordId].id})});assert.equal(reviewResponse.status,200);const reviewed=await reviewResponse.json();assert.equal(reviewed.reviews[wordId].status,'answered');
-r=await cmd(0,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id});assert.equal(r.reviews[wordId].approvedId,proposal.reviews[wordId].id);
 // Complete all five sets using explicit host judgments in this named QA room.
 while(!(r.competition.set===5&&r.competition.setComplete)){
- await cmd(0,'lobby');r=await cmd(0,'start',{manual:true,text:'ทะเล'});
+ if(r.continuation){const end=Date.now()+12000;do{await new Promise(resolve=>setTimeout(resolve,300));r=await cmd(3,'read');}while(r.continuation&&Date.now()<end);assert.equal(r.status,'playing');}else{await cmd(0,'lobby');r=await cmd(0,'start',{manual:true,text:'ทะเล'});}
  assert.equal(JSON.stringify(r).includes('QA ตรวจคำนาม'),false,'active play must hide archived analysis');
  const currentIndex=ids.indexOf(r.players[r.turnIndex].id);r=await cmd(currentIndex,'submit',{text:'แมว',turn:r.turnNumber});
  r=await cmd(0,'reject',{wordId:r.chain[0].id});
 }
+const finalWord=r.reviewWords.filter(w=>w.playerId).at(-1);wordId=finalWord.id;
+const analysis={syllables:[finalWord.text],category:'noun',nounType:'common',reason:'QA ตรวจคำนามและรูปเขียน ปลา',suggestions:[],titleContext:''};
+const proposal=await cmd(1,'review',{wordId,analysis});assert.equal(proposal.reviews[wordId].approvedId,undefined);
+await cmd(1,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id},400);
+const reviewResponse=await fetch(base+'/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,token:tokens[1],wordId,proposalId:proposal.reviews[wordId].id})});assert.equal(reviewResponse.status,200);const reviewed=await reviewResponse.json();assert.equal(reviewed.reviews[wordId].status,'answered');
+r=await cmd(0,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id});assert.equal(r.reviews[wordId].approvedId,proposal.reviews[wordId].id);
 assert.equal(r.competition.completedSets.length,5);const scores=r.players.map(p=>({name:p.name,score:p.score}));
 // Read through another authenticated session to prove persistence, not just a returned payload.
 const saved=await cmd(3,'read');assert.deepEqual(saved.players.map(p=>p.score),r.players.map(p=>p.score));

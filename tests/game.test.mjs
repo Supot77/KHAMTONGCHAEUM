@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGame, startRound, submitWord, applySegments, duplicates, scoreboard, advanceTimeout, rollback, resolveManually,applyAnalyses,publicGame,validateWord,validateSyllables } from '../lib/game.ts';
+import { createGame, startRound, submitWord, applySegments, duplicates, scoreboard, advanceTimeout, rollback, resolveManually,applyAnalyses,publicGame,validateWord,validateSyllables,roundWords } from '../lib/game.ts';
 
 const setup = () => {
   const r = createGame('ABCDEF', 'shared', ['เอ', 'บี', 'ซี'], 'hash', 30, 0);
@@ -73,7 +73,7 @@ test('non-noun ends round; later words appear in summary but cannot score',()=>{
  applyAnalyses(r,r.roundId,[{id:verb.id,analysis:analysis(['วิ่ง'],'verb','none',{suggestions:['การวิ่ง']})}],4000);
  assert.equal(r.status,'ended');assert.equal(r.result.reason,'not_noun');assert.equal(r.result.loserId,r.players[0].id);
  assert.deepEqual(r.events[0].suggestions,['การวิ่ง']);assert.deepEqual(r.events[0].reusable.map(w=>w.text),['แมว']);
- assert.deepEqual(publicGame(r,0,r.hostId).reviewWords.map(w=>w.text),['ทะเล','วิ่ง','แมว']);
+ assert.deepEqual(publicGame(r,0,r.hostId).reviewWords,[]);assert.deepEqual(roundWords(r).map(w=>w.text),['ทะเล','วิ่ง','แมว']);
 });
 test('known work titles pass regardless of sentence shape; unknown titles need human review',()=>{
  const r=setup();const song=send(r,'ถ้าเราเจอกันอีก');

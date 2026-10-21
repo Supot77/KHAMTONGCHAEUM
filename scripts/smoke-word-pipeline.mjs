@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-if(!process.argv.includes('--allow-live'))throw new Error('Use --allow-live: this creates a QA room, calls Gemini for five opening words and one explicit review. Run on a Neon QA branch.');
+if(!process.argv.includes('--allow-live'))throw new Error('Use --allow-live: this creates a QA room, uses database openings and calls Gemini for one explicit review. Run on a Neon QA branch.');
 const base=process.env.GAME_TEST_URL||'http://127.0.0.1:5174';
 const token=crypto.randomUUID()+crypto.randomUUID();let code;
 async function post(path,data){const response=await fetch(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,code,...data}),signal:AbortSignal.timeout(60000)});const value=await response.json();assert.equal(response.status,200,JSON.stringify(value));return value;}
@@ -12,7 +12,7 @@ const sets=[];
 for(let set=1;set<=5;set++){
  await cmd('start');const result=await check();state=await cmd('read');assert.equal(state.status,'playing',JSON.stringify(result));assert.equal(state.competition.set,set);
  const seed=state.chain[0].text;
- const [first,duplicate]=[['ปลา','ปลาดาว'],['แมว','แมวน้ำ'],['นก','นกแก้ว']].find(([word])=>word!==seed);
+ const [first,duplicate]=[['ปลา','ปลาดาว'],['แมว','แมวน้ำ'],['นก','นกแก้ว']].find(([word])=>!state.chain[0].syllables.includes(word));
  state=await cmd('submit',{text:first,turn:state.turnNumber});assert.equal(state.chain[0].analysisSource,'database',`${first} must already be in QA dictionary`);assert.equal(state.chain[0].verification.status,'valid');cacheHits++;
  state=await cmd('submit',{text:duplicate,turn:state.turnNumber});
  // An absent compound is analyzed once; existing compounds must finish directly on submit.

@@ -1,4 +1,4 @@
-// Explicit opt-in: one seed request; classification requests only for actual cache misses.
+// Explicit opt-in: database opening; classification requests only for actual cache misses.
 import assert from 'node:assert/strict';
 if(!process.argv.includes('--allow-live'))throw new Error('Use --allow-live to test the configured Gemini API.');
 const base=process.env.GAME_TEST_URL||'http://127.0.0.1:5173';
@@ -21,7 +21,7 @@ const result=await check();r=await room('read');
 if(result.error)throw new Error(result.error);
 assert.equal(r.wordCount,1);assert.equal(r.status,'ended');assert.equal(r.events.at(-1).word,duplicate);assert.equal(r.events.at(-1).previous,first);
 assert.deepEqual(r.events.at(-1).reusable.map(w=>w.text),submitted.slice(2));assert.equal(r.turnIndex,1);
-assert.ok(r.reviewWords.some(w=>w.text===duplicate));
+if(r.continuation)assert.deepEqual(r.reviewWords,[]);else assert.ok(r.reviewWords.some(w=>w.text===duplicate));
 const survivors=r.competition.activeIds.length;
 
 console.log(JSON.stringify({phase:'after check',seed,chain:r.chain.map(w=>w.text),culprit:r.events.at(-1).playerName,repeated:r.events.at(-1).syllables,reusable:r.events.at(-1).reusable.map(w=>w.text),survivors,elimination:'PASS',summary:'PASS',result:'PASS'}));

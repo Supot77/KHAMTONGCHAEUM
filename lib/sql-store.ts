@@ -6,8 +6,13 @@ export type SqlRow=Record<string,unknown>;
 export type SqlExecute=(query:string,parameters:unknown[])=>Promise<SqlRow[]>;
 export type SqlTransaction=<T>(work:(execute:SqlExecute)=>Promise<T>)=>Promise<T>;
 const CACHE_VERSION='written-thai-v1';
-export function createSqlStore(execute:SqlExecute,clock=()=>Date.now(),transaction?:SqlTransaction):RoomStore {
+export function createSqlStore(execute:SqlExecute,clock=()=>Date.now(),transaction?:SqlTransaction,dialect:'sqlite'|'postgres'='sqlite'):RoomStore {
   return {
+    async randomNoun(){
+      const category=dialect==='postgres'?"(analysis::jsonb ->> 'category')":"json_extract(analysis,'$.category')";
+      const [row]=await execute(`SELECT word,analysis FROM word_dictionary WHERE ${category} = 'noun' ORDER BY RANDOM() LIMIT 1`,[]);
+      return row?{text:String(row.word),analysis:validateAnalysis(String(row.word),JSON.parse(String(row.analysis)))}:null;
+    },
     async read(code){const [row]=await execute(`SELECT data, revision FROM rooms WHERE code = ? AND ${ROOM_ACTIVITY_SQL} > ?`,[code,clock()-ROOM_IDLE_MS]);return row?{game:JSON.parse(String(row.data)) as Game,revision:Number(row.revision)}:null;},
     async insert(game){const rows=await execute('INSERT INTO rooms (code,data,revision,updated_at,last_active_at) VALUES (?,?,0,?,?) ON CONFLICT (code) DO NOTHING RETURNING code',[game.code,JSON.stringify(game),clock(),clock()]);return rows.length===1;},
     async write(code,revision,game){const rows=await execute(`UPDATE rooms SET data = ?, revision = revision + 1, updated_at = ? WHERE code = ? AND revision = ? AND ${ROOM_ACTIVITY_SQL} > ? RETURNING code`,[JSON.stringify(game),clock(),code,revision,clock()-ROOM_IDLE_MS]);return rows.length===1;},

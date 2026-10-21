@@ -17,6 +17,7 @@ async function until(predicate){for(let i=0;i<100;i++){if(predicate())return;awa
 function fixture(){
  const db=new DatabaseSync(':memory:');db.exec(schema);let now=1000;
  const store=createSqlStore(async(q,p)=>db.prepare(q).all(...p),()=>now);
+ store.randomNoun=async()=>({text:'ปลา',analysis:noun(['ปลา'])});
  const provider={configured:true,model:'first-model',seed:async()=>({text:'ปลา',syllables:['ปลา']}),analyze:async words=>Object.fromEntries(words.map(w=>[w,noun([w])])),reviewAnalysis:async({proposal})=>({verdict:'agree',analysis:proposal,reason:'ตรวจแล้ว เห็นด้วยกับข้อเสนอ'}),judgeConnection:async()=>({connected:true,reason:'ทดสอบ'})};
  const service=new RoomService(store,provider,()=>now);
  return {db,store,provider,service,time:x=>now=x,next:()=>now+=5000,
@@ -55,7 +56,7 @@ test('cache hits are applied while an unrelated model request is still in flight
 
 test('automatic cached/new-word duplicate checks finish all five sets with correct totals',async()=>{
  const f=fixture(),r=await f.room();await f.store.saveAnalyses('previous-model',{'แมว':noun(['แมว'])});let calls=0,seeds=0;
- f.provider.seed=async()=>{seeds++;return {text:'ปลา',syllables:['ปลา']};};
+ f.store.randomNoun=async()=>{seeds++;return {text:'ปลา',analysis:noun(['ปลา'])};};
  f.provider.analyze=async words=>{calls++;assert.equal(words.length,1);return {[words[0]]:noun(['แมว',words[0].slice(3)])};};
  const cases=['แมวป่า','แมวบ้าน','แมวดำ','แมวส้ม','แมวขาว'];
  for(let i=0;i<5;i++){
@@ -78,7 +79,7 @@ test('reverse analysis arrival and ended findings never lose a duplicate or chan
 });
 
 test('new live words are analyzed ahead of archived pending words',async()=>{
- const f=fixture(),r=await f.room(['A','B','C']);await r.start();await r.submit('คำเก่า');await r.send('pass',{turn:(await r.read()).turnNumber});await r.send('lobby');await r.start();
+ const f=fixture(),r=await f.room(['A','B','C']);await r.start();await r.submit('คำเก่า');await r.send('pass',{turn:(await r.read()).turnNumber});f.next();await r.read();
  await r.submit('แมว');let requested;f.provider.analyze=async words=>{requested=words;return {'แมว':noun(['แมว'])};};await f.service.check(r.auth.code,r.auth.token);
  assert.deepEqual(requested,['แมว']);assert.equal((await r.read()).chain[0].verification.status,'valid');f.db.close();
 });

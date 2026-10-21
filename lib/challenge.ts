@@ -18,7 +18,7 @@ export function openChallenge(game:Game,actorId:string,wordId:string,turn:number
   const active=activeIds(game),word=game.chain.at(-1),previous=game.chain.at(-2);
   if(active.length<3)throw new Error('ชาเลนจ์ต้องมีผู้เล่นที่ยังอยู่ในเซ็ตอย่างน้อย 3 คน');
   if(!active.includes(actorId)||actorId===game.players[game.turnIndex].id||actorId===word?.playerId)throw new Error('คนที่เล่นตาปัจจุบัน เจ้าของคำ และคนที่ตกรอบแล้ว ชาเลนจ์ไม่ได้');
-  if(!word||!previous||word.id!==wordId||!word.playerId||!active.includes(word.playerId))throw new Error('ชาเลนจ์ได้เฉพาะคำล่าสุดของผู้เล่นที่ยังอยู่');
+  if(!word||!previous||word.id!==wordId||!word.playerId||!active.includes(word.playerId)||(word.phaseId&&word.phaseId!==game.roundId))throw new Error('ชาเลนจ์ได้เฉพาะคำล่าสุดที่ส่งในช่วงนี้ของผู้เล่นที่ยังอยู่');
   game.challenge={id:crypto.randomUUID(),wordId,ownerId:word.playerId,challengerId:actorId,previous:previous.text,word:word.text,phase:'owner',deadline:now+60000,remainingMs:game.deadline===null?null:Math.max(0,game.deadline-now),opening:argumentText(reason,true),ownerArgument:'',challengerArgument:'',voterIds:active.filter(id=>id!==actorId&&id!==word.playerId),votes:{}};
   game.deadline=null;game.turnNumber++;
 }

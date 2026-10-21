@@ -2,7 +2,7 @@ import { RoomUnavailableError } from './room-lifecycle.ts';
 import { advanceChallenge,openChallenge,debate,castVote,resolveChallenge } from './challenge.ts';
 import { validateAnalysis } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
-import { createGame, startRound, submitWord, skipTurn, advanceTimeout, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, analysisCandidates, requiresVerification, roundWords, rollback, resolveManually, appealReset } from './game.ts';
+import { createGame, startRound, submitWord, skipTurn, advanceTimeout, advanceContinuation, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, analysisCandidates, requiresVerification, roundWords, rollback, resolveManually, appealReset } from './game.ts';
 import type { Game } from './game.ts';
 import { AiError } from './gemini.ts';
 import type { LanguageProvider } from './gemini.ts';
@@ -14,6 +14,7 @@ export interface RoomStore {
   touch(code:string,now:number):Promise<boolean>;
   pruneExpired(now:number):Promise<number>;
   analyses(model:string,words:string[]):Promise<Record<string,WordAnalysis>>;
+  randomNoun():Promise<{text:string;analysis:WordAnalysis}|null>;
   saveAnalyses(model:string,entries:Record<string,WordAnalysis>,source?:'model'|'players',metadata?:Record<string,string>):Promise<void>;
   claimAnalyses(words:string[],leaseId:string,until:number,now:number):Promise<string[]>;
   releaseAnalyses(words:string[],leaseId:string):Promise<void>;
@@ -55,13 +56,22 @@ export class RoomService {
       let row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
       const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้ กรุณาเข้าห้องอีกครั้ง');
       if(command.action==='heartbeat'&&!await this.store.touch(code,now))throw new RoomUnavailableError();
-      if(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline))){const updated=await this.mutate(code,g=>{advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
+      if((row.game.continuation&&now>=row.game.continuation.at)||(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline)))){const updated=await this.mutate(code,g=>{advanceContinuation(g,now);advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
       return publicGame(row.game,row.revision,player.id,now);
     }
     if(typeof command.commandId!=='string'||command.commandId.length<8||command.commandId.length>80)throw new Error('ไม่พบรหัสคำสั่ง กรุณาลองอีกครั้ง');
     if(command.action==='confirmReview')return this.confirmReview(code,hash,command);
     // Cache hits are independent of model readiness, cooldown and in-flight jobs.
     let cached:WordAnalysis|undefined;
+    let opening:{text:string;analysis:WordAnalysis}|null=null;
+    let openingRoundId:string|undefined;
+    if(command.action==='start'&&command.manual!==true){
+      const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
+      if(row.game.players.find(p=>p.tokenHash===hash)?.id!==row.game.hostId)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
+      if(row.game.continuation)throw new Error('กำลังนับถอยหลัง เล่นต่ออัตโนมัติได้เลย');
+      openingRoundId=row.game.roundId;
+      opening=await this.store.randomNoun();if(!opening)throw new Error('ฐานคำยังไม่มีคำนามที่ใช้ได้ เลือกให้ผู้เล่นตั้งคำแรกหรือเพิ่มคำนามในฐานก่อน');
+    }
     if(command.action==='submit'){
       const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
       if(!row.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
@@ -78,6 +88,8 @@ export class RoomService {
       }
       if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
       if(game.processed.includes(command.commandId!))return player.id;
+      if(game.continuation&&['start','lobby','review','confirmReview'].includes(command.action))throw new Error('กำลังนับถอยหลัง เล่นต่ออัตโนมัติได้เลย');
+      advanceContinuation(game,now);
       if(['start','lobby'].includes(command.action)&&Object.values(game.reviews??{}).some(r=>r.status==='confirming'&&(r.leaseUntil??0)>now))throw new Error('กำลังบันทึกฐานคำ กรุณารอสักครู่');
       advanceChallenge(game,now);
       const host=player.id===game.hostId;
@@ -87,14 +99,16 @@ export class RoomService {
       if(command.action==='debate')debate(game,actor,command.text,command.finish===true,now);
       if(command.action==='vote')castVote(game,actor,command.connected,now);
       if(['start','retry','end','reject','accept','appeal','lobby','confirmReview'].includes(command.action)&&!host)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
+      if(['reject','accept'].includes(command.action)){const word=game.chain.find(w=>w.id===command.wordId);if((word?.phaseId&&word.phaseId!==game.roundId)||(word?.playerId&&game.competition&&!game.competition.activeIds.includes(word.playerId)))throw new Error('คำจากช่วงก่อนหน้าให้ตรวจทานตอนจบเซ็ต');}
       if(command.action==='submit'){const word=submitWord(game,player.id,command.text,now,Number(command.turn));if(cached&&!game.manual){word.analysisSource='database';applyAnalyses(game,game.roundId,[{id:word.id,analysis:cached}],now);}}
       if(command.action==='pass')skipTurn(game,player.id,now,Number(command.turn));
       if(command.action==='start'){
+        if(openingRoundId&&game.roundId!==openingRoundId)throw new Error('การเริ่มเกมถูกยกเลิกหรือห้องเปลี่ยนแล้ว');
         if(game.status!=='lobby'&&game.status!=='ended')throw new Error('เกมเริ่มแล้ว');
         if(game.players.length<2)throw new Error('รอผู้เล่นอย่างน้อย 2 คน');
         game.manual=command.manual===true;
         if(game.manual){const text=validateWord(command.text);startRound(game,{text,syllables:[text.replace(/[^\p{L}\p{M}\p{N}]/gu,'')]},now);game.chain[0].manual=true;game.chain[0].syllables=null;}
-        else {if(!this.provider.configured)throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key ที่เซิร์ฟเวอร์');game.roundId=crypto.randomUUID();game.status='starting';game.deadline=null;game.lease=null;game.aiError=null;game.nextCheckAt=0;}
+        else {startRound(game,{text:opening!.text,syllables:opening!.analysis.syllables},now);game.chain[0].analysis=opening!.analysis;game.chain[0].analysisSource='database';}
       }
       if(command.action==='retry'){game.aiError=null;game.nextCheckAt=0;for(const w of roundWords(game))if(w.check==='error')w.check='pending';}
       if(command.action==='end'){if(game.status!=='playing')throw new Error('ยังไม่ได้เริ่มเล่น');if(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase)){game.challenge.phase='cancelled';game.challenge.deadline=null;}game.status='ended';game.deadline=null;}
@@ -136,7 +150,7 @@ export class RoomService {
     const state=await this.mutate(code,game=>{
       claimed=false;
       const player=game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
-      if(game.status!=='ended')throw new Error('ขอตรวจใหม่ได้หลังจบช่วงคำเท่านั้น');
+      if(game.status!=='ended'||game.continuation)throw new Error('ขอตรวจใหม่ได้หลังจบเซ็ตหรือพักตรวจคำเท่านั้น');
       const proposal=game.reviews?.[wordId];if(!proposal||proposal.id!==proposalId)throw new Error('ข้อเสนอเปลี่ยนแล้ว กรุณาส่งใหม่');
       if(proposal.status==='answered'||proposal.status==='approved'||proposal.status==='confirming'||(proposal.status==='checking'&&(proposal.leaseUntil??0)>this.clock()))return player.id;
       if(!this.provider.configured)throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key');
@@ -159,7 +173,7 @@ export class RoomService {
     const wordId=String(command.wordId),proposalId=String(command.proposalId),useModel=command.useModel!==false;
     const state=await this.mutate(code,game=>{
       const player=game.players.find(p=>p.tokenHash===hash);if(player?.id!==game.hostId)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
-      if(game.status!=='ended')throw new Error('ยืนยันข้อมูลคำได้หลังจบช่วงคำเท่านั้น');
+      if(game.status!=='ended'||game.continuation)throw new Error('ยืนยันข้อมูลคำได้หลังจบเซ็ตหรือพักตรวจคำเท่านั้น');
       const r=game.reviews?.[wordId];if(!r||r.id!==proposalId)throw new Error('ข้อเสนอเปลี่ยนแล้ว กรุณาตรวจทานอีกครั้ง');
       if(r.approvedId===r.id)return player.id;
       if(r.status==='confirming'&&(r.leaseUntil??0)>this.clock())throw new Error('กำลังบันทึก กรุณารอสักครู่');
@@ -186,7 +200,7 @@ export class RoomService {
     await this.hydrateCached(code,hash);
     const existing=await this.store.read(code);if(!existing)throw new RoomUnavailableError();
     if(!existing.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
-    const ready=(g:Game)=>this.provider.configured&&g.nextCheckAt<=now&&(!g.lease||g.lease.until<=now)&&((g.status==='playing'&&g.challenge?.phase==='judging')||(!g.manual&&(g.status==='starting'||(['playing','ended'].includes(g.status)&&analysisCandidates(g).some(needsAnalysis)))));
+    const ready=(g:Game)=>(g.status==='starting'||this.provider.configured)&&g.nextCheckAt<=now&&(!g.lease||g.lease.until<=now)&&((g.status==='playing'&&g.challenge?.phase==='judging')||(!g.manual&&(g.status==='starting'||(['playing','ended'].includes(g.status)&&analysisCandidates(g).some(needsAnalysis)))));
     if(!ready(existing.game))return {checked:false};
     await this.mutate(code,game=>{
       job=undefined;if(!ready(game))return;
@@ -201,10 +215,8 @@ export class RoomService {
         const result=await this.provider.judgeConnection({previous:c.previous,word:c.word,opening:c.opening,ownerArgument:c.ownerArgument,challengerArgument:c.challengerArgument});
         await this.mutate(code,game=>{if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id)return;if(game.challenge?.id===claimed.judgeId)resolveChallenge(game,result.connected,'model',result.reason,this.clock());game.lease=null;game.aiError=null;});
       }else if(claimed.seed){
-        const seed=await this.provider.seed();
-        const analysis=validateAnalysis(seed.text,{syllables:seed.syllables,category:'noun',nounType:'common',reason:'คำนามตั้งต้นจากชุดคำที่กำหนด',suggestions:[],titleContext:''});
-        await this.store.saveAnalyses(this.provider.model,{[seed.text]:analysis});
-        await this.mutate(code,game=>{if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id||game.status!=='starting')return;startRound(game,seed,this.clock());game.chain[0].analysis=analysis;});
+        const seed=await this.store.randomNoun();if(!seed)throw new Error('ฐานคำยังไม่มีคำนามที่ใช้ได้');
+        await this.mutate(code,game=>{if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id||game.status!=='starting')return;startRound(game,{text:seed.text,syllables:seed.analysis.syllables},this.clock());game.chain[0].analysis=seed.analysis;game.chain[0].analysisSource='database';});
       } else {
         const words=[...new Set(claimed.words.map(w=>w.text))];
         const entries=await this.store.analyses(this.provider.model,words);

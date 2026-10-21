@@ -19,7 +19,7 @@ export async function roomStore():Promise<RoomStore> {
       const client=await databasePool!.connect();
       try{await client.query('BEGIN');const value=await work(async(q,p)=>(await client.query(postgresPlaceholders(q),p)).rows);await client.query('COMMIT');return value;}
       catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
-    });
+    },'postgres');
   }
   if(process.env.VERCEL)throw new Error('ยังไม่ได้เชื่อม Neon: ตั้งค่า DATABASE_URL และรัน schema ตามคู่มือ');
   if(!localStore){

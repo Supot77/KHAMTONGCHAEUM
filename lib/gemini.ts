@@ -1,11 +1,10 @@
-import { validateWord, validateSyllables } from './game.ts';
+import { validateSyllables } from './game.ts';
 import { CATEGORIES,NOUN_TYPES,validateAnalysis } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
 
 export interface LanguageProvider {
   configured:boolean;
   model:string;
-  seed():Promise<{text:string;syllables:string[]}>;
   analyze(words:string[]):Promise<Record<string,WordAnalysis>>;
   reviewAnalysis(input:{word:string;original:WordAnalysis|null;proposal:WordAnalysis}):Promise<{verdict:'agree'|'revise'|'uncertain';analysis:WordAnalysis;reason:string}>;
   judgeConnection(input:{previous:string;word:string;opening:string;ownerArgument:string;challengerArgument:string}):Promise<{connected:boolean;reason:string}>;
@@ -13,7 +12,6 @@ export interface LanguageProvider {
 }
 export const DEFAULT_MODEL='gemini-3.5-flash-lite';
 const arrayOfStrings={type:'ARRAY',items:{type:'STRING'}};
-const OPENING_NOUNS=['ปลา','แมว','นก','ช้าง','บ้าน','เรือ','รถ','ดาว','เมฆ','ฝน','ดิน','ไฟ','ไข่','ข้าว','นม','ชา','เต่า','ปู','กุ้ง','ลิง','กบ','มด','จาน','ช้อน','แก้ว','โต๊ะ','เตียง','หมอน','เสื้อ','หิน','ลม','หมี','เสือ','ม้า'];
 export class AiError extends Error { retryAfter:number; constructor(message:string,retryAfter=15000){super(message);this.retryAfter=retryAfter;} }
 export function parseSegments(words:string[],value:unknown):Record<string,string[]> {
   const items=(value as {items?:unknown})?.items;
@@ -73,12 +71,6 @@ Return category noun/verb/adjective/adverb/sentence/phrase/other/uncertain and n
 For names with spaces/punctuation, leave separators out of syllables. Joining syllables must reproduce all ORIGINAL letters, marks and numbers, in order, with only spaces/punctuation removed. Preserve Thai syllable boundaries, e.g. ถ้าเราเจอกันอีก -> ["ถ้า","เรา","เจอ","กัน","อีก"]. Do not rewrite spelling or strip silent letters. English names keep original letters; split by reading boundaries only when confident. titleContext is empty for non-work inputs.`;
   return {
     configured,model,
-    async seed(){
-      // A curated one-syllable seed vocabulary makes the opening segmentation certain.
-      // The model selects the word; there is no silent random or offline AI substitute.
-      const value=await generate('เลือกคำนามภาษาไทยหนึ่งคำจากรายการที่ให้ เป็นคำเปิดเกมต่อคำ เลือกให้หลากหลาย ตอบ JSON ตาม schema เท่านั้น',JSON.stringify({nouns:OPENING_NOUNS,variation:crypto.randomUUID()}),{type:'OBJECT',properties:{text:{type:'STRING',enum:OPENING_NOUNS}},required:['text']}) as {text:string};
-      const text=validateWord(value.text);if(!OPENING_NOUNS.includes(text))throw new AiError('คำตั้งต้นไม่ตรงรูปแบบ กรุณาลองใหม่');return {text,syllables:[text]};
-    },
     async analyze(words){
       const schema={type:'OBJECT',properties:{items:{type:'ARRAY',items:{type:'OBJECT',properties:{word:{type:'STRING'},syllables:arrayOfStrings,category:{type:'STRING',enum:[...CATEGORIES]},nounType:{type:'STRING',enum:[...NOUN_TYPES]},reason:{type:'STRING'},suggestions:arrayOfStrings,titleContext:{type:'STRING'}},required:['word','syllables','category','nounType','reason','suggestions','titleContext']}}},required:['items']};
       return parseAnalyses(words,await generate(segmentationInstructions,JSON.stringify({words}),schema));

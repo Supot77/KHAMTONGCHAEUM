@@ -10,7 +10,7 @@
     "dev": "next dev --port 5173",
     "build": "next build",
     "start": "next start --port 5173",
-    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs tests/expiry.test.mjs tests/pipeline.test.mjs",
+    "test": "node --experimental-strip-types --test tests/game.test.mjs tests/rooms.test.mjs tests/storage.test.mjs tests/competition.test.mjs tests/expiry.test.mjs tests/pipeline.test.mjs tests/continuation.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:setup": "node scripts/setup-db.mjs"
   },

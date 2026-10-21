@@ -10,6 +10,7 @@ class MemoryStore{
   async write(code,revision,game){if(this.rows.get(code)?.revision!==revision)return false;this.rows.set(code,{game:structuredClone(game),revision:revision+1});return true;}
   async touch(code){return this.rows.has(code);}
   async pruneExpired(){return 0;}
+  async randomNoun(){return {text:'ทะเล',analysis:{syllables:['ทะ','เล'],category:'noun',nounType:'common',reason:'คำนามจากฐานทดสอบ',suggestions:[],titleContext:''}};}
   async analyses(model,words){return Object.fromEntries(words.filter(w=>this.facts[w]).map(w=>[w,this.facts[w].analysis]));}
   async saveAnalyses(model,entries,source='model'){for(const [word,analysis] of Object.entries(entries)){if(this.facts[word]?.source==='players'&&source==='model')continue;this.facts[word]={analysis:structuredClone(analysis),source};this.writes++;}}
   async claimAnalyses(words,id,until,now){return words.filter(w=>{const old=this.claims.get(w);if(old&&old.until>now)return false;this.claims.set(w,{id,until});return true;});}
@@ -60,17 +61,18 @@ test('failed provider preserves unresolved status, retries with backoff',async()
   assert.equal(r.chain.at(-1).check,'error');assert.equal(r.status,'playing');assert.equal(r.aiError,'quota');assert.equal(r.nextCheckAt,61000);
   assert.equal((await f.service.check(r.code,f.auth.token)).checked,false);
 });
-test('stale seed never starts a canceled round',async()=>{
-  let complete;const provider=basicProvider();provider.seed=()=>new Promise(resolve=>{complete=resolve;});
-  const service=new RoomService(new MemoryStore(),provider,()=>1000),key=token();const room=await service.command(cmd('create',{mode:'shared',names:['เอ','บี'],token:key}));const auth={code:room.code,token:key};
-  await service.command(cmd('start',auth));const task=service.check(room.code,key);while(!complete)await new Promise(resolve=>setTimeout(resolve,0));
-  await service.command(cmd('lobby',auth));complete({text:'ทะเล',syllables:['ทะ','เล']});await task;
-  assert.equal((await service.command({action:'read',...auth})).status,'lobby');
+test('a canceled database opening cannot start a stale room',async()=>{
+ let complete;const store=new MemoryStore();store.randomNoun=()=>new Promise(resolve=>{complete=resolve;});
+ const service=new RoomService(store,basicProvider(),()=>1000),key=token();const room=await service.command(cmd('create',{mode:'shared',names:['เอ','บี'],token:key}));const auth={code:room.code,token:key};
+ const task=service.command(cmd('start',auth));while(!complete)await new Promise(resolve=>setTimeout(resolve,0));
+ await service.command(cmd('lobby',auth));complete({text:'ทะเล',analysis:{syllables:['ทะ','เล'],category:'noun',nounType:'common',reason:'คำนาม',suggestions:[],titleContext:''}});
+ await assert.rejects(()=>task,/ยกเลิก/);assert.equal((await service.command({action:'read',...auth})).status,'lobby');
 });
+
 test('strict provider contract rejects phonetic rewrites; no-key never calls fetch',async()=>{
   assert.throws(()=>parseSegments(['จันทร์'],{items:[{word:'จันทร์',syllables:['จัน']}]}),/รูปเขียน/);
   assert.deepEqual(parseSegments(['จันทร์'],{items:[{word:'จันทร์',syllables:['จันทร์']}]}),{'จันทร์':['จันทร์']});
-  let calls=0;const p=createProvider('',undefined,async()=>{calls++;return Response.json({});});await assert.rejects(()=>p.seed(),/API Key/);assert.equal(calls,0);
+  let calls=0;const p=createProvider('',undefined,async()=>{calls++;return Response.json({});});await assert.rejects(()=>p.analyze(['ปลา']),/API Key/);assert.equal(calls,0);
 });
 
 test('database is authoritative: existing words cause zero model classification calls',async()=>{

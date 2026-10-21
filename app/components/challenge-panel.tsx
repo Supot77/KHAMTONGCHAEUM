@@ -30,6 +30,6 @@ export function ChallengePanel({game,busy,now,send}:Props){
       {challenge.phase==='cancelled'&&<p>ยุติชาเลนจ์เนื่องจากมีผลแพ้อื่นของช่วงนี้</p>}
     </section>;
   }
-  if(game.status!=='playing'||game.players.filter(p=>p.active).length<3||!last?.playerId||!eligible.some(p=>p.id===actorId))return null;
+  if(game.status!=='playing'||game.players.filter(p=>p.active).length<3||!last?.playerId||(last.phaseId&&last.phaseId!==game.roundId)||!eligible.some(p=>p.id===actorId))return null;
   return <details className="challenge-open"><summary><Flag size={16}/> ชาเลนจ์ความเชื่อมโยงของคำล่าสุด</summary><form onSubmit={e=>{e.preventDefault();void send('challenge',{actorId,wordId:last.id,turn:game.turnNumber,reason});}}>{shared&&<label className="field-label">ผู้ชาเลนจ์<select value={actorId} onChange={e=>setActor(e.target.value)}>{eligible.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}<label className="field-label">คำสองคำไม่เชื่อมกันอย่างไร?<textarea required value={reason} onChange={e=>setReason(e.target.value.replace(/[\r\n]/g,' '))} maxLength={1000}/></label><p>ดีเบตคนละ 60 วินาที โหวต 30 วินาที · ผู้แพ้ตกรอบในเซ็ตนี้ ผู้ชนะได้ 2 แต้ม</p><button className="button subtle" type="submit" disabled={busy||!reason.trim()}>เปิดชาเลนจ์</button></form></details>;
 }
