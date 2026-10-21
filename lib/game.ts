@@ -1,3 +1,4 @@
+import {playerName} from './player-name.ts';
 import { prepareCompetition,eliminate,nextActiveIndex,activeIds } from './competition.ts';
 import type { Competition } from './competition.ts';
 import type { Challenge } from './challenge.ts';
@@ -9,10 +10,11 @@ export type Verification={duplicateKind?:'word'|'syllable';status:'waiting_analy
 export type Word = { id: string; playNumber?:number; phaseId?:string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; languageStatus?:'queued'|'analyzing'|'ready'|'uncertain'|'error'; analysisSource?:'database'|'model'; verification?:Verification; manual?: boolean; at: number };
 export type ResetEvent = { id: string; duplicateKind?:'word'|'syllable';turn?:number;previousTurn?:number;previousPlayerId?:string|null;previousPlayerName?:string;resumeId?:string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
 export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; model?:string; status?:'draft'|'checking'|'answered'|'error'|'confirming'|'approved'; requestId?:string; leaseUntil?:number; response?:{verdict:'agree'|'revise'|'uncertain';analysis:WordAnalysis;reason:string}; error?:string; approvedId?:string; approvedAnalysis?:WordAnalysis};
-export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge';at:number};
+export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge'|'leave';at:number};
 export const SUBMISSION_GRACE_MS=3000;
 export const SUBMISSION_LEASE_MS=35000;
 export type Game = {
+  departedPlayers?:{id:string;name:string}[];
   submission?:{id:string;actorId:string;playerId:string;turn:number;roundId:string;text:string;remainingMs:number|null;until:number}|null;
   setsPerRound?:3|5;
   continuation?:{at:number;starterId:string;anchorId:string;word:string;loserId:string}|null;
@@ -117,7 +119,7 @@ export function skipTurn(game:Game,actorId:string,now:number,expectedTurn:number
 export function rollback(game:Game,wordId:string,reason:'duplicate'|'human'|'not_noun',syllables:string[],now:number,match?:Word) {
   const index=game.chain.findIndex(w=>w.id===wordId);if(index<1)return;
   const word=game.chain[index];const neighbor=game.chain[index-1];const prev=match??neighbor;
-  const name=(id:string|null)=>game.players.find(p=>p.id===id)?.name??'คำตั้งต้น';
+  const name=(id:string|null)=>playerName(game,id);
   const removed=game.chain.splice(index);
   game.events.push({id:crypto.randomUUID(),at:now,reason,duplicateKind:reason==='duplicate'?(match?'word':'syllable'):undefined,turn:word.playNumber??index,previousTurn:prev.playNumber??game.chain.findIndex(w=>w.id===prev.id),previousPlayerId:prev.playerId,previousPlayerName:name(prev.playerId),resumeId:neighbor.id,word:word.text,wordId:word.id,previous:prev.text,previousId:prev.id,playerName:name(word.playerId),playerId:word.playerId!,syllables,explanation:reason==='not_noun'?word.analysis?.reason:undefined,suggestions:reason==='not_noun'?word.analysis?.suggestions:undefined,reusable:removed.slice(1).map(w=>({text:w.text,playerName:name(w.playerId)})),removed});
   finishRound(game,word.playerId!,reason,now);
@@ -211,7 +213,7 @@ export function advanceContinuation(game:Game,now=Date.now()):boolean{
   const previous=roundWords(game);for(const word of previous)word.phaseId??=game.roundId;
   const removed=game.chain.splice(index+1);
   const rejected=game.challenge?.result?.connected===false?game.challenge.wordId:null;
-  game.releasedWords=[...(game.releasedWords??[]),...removed.filter(w=>w.id!==rejected).map(w=>({text:w.text,playerName:game.players.find(p=>p.id===w.playerId)?.name??'ผู้เล่น'}))];
+  game.releasedWords=[...(game.releasedWords??[]),...removed.filter(w=>w.id!==rejected).map(w=>({text:w.text,playerName:playerName(game,w.playerId)}))];
   game.archiveWords=previous;game.roundId=crypto.randomUUID();
   game.turnIndex=game.players.findIndex(p=>p.id===next.starterId);
   game.turnNumber++;game.deadline=deadline(game,next.at);game.status='playing';

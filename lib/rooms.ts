@@ -1,3 +1,5 @@
+import type {DictionaryStore} from './dictionary.ts';
+import {removeRoomPlayer} from './leave-room.ts';
 import { RoomUnavailableError } from './room-lifecycle.ts';
 import { advanceChallenge,openChallenge,debate,castVote,resolveChallenge } from './challenge.ts';
 import { validateAnalysis } from './word-analysis.ts';
@@ -7,9 +9,10 @@ import type { Game } from './game.ts';
 import { AiError } from './gemini.ts';
 import type { LanguageProvider } from './gemini.ts';
 
-export interface RoomStore {
+export interface RoomStore extends DictionaryStore {
   read(code:string):Promise<{game:Game;revision:number}|null>;
   insert(game:Game):Promise<boolean>;
+  remove(code:string,revision:number):Promise<boolean>;
   write(code:string,revision:number,game:Game):Promise<boolean>;
   touch(code:string,now:number):Promise<boolean>;
   pruneExpired(now:number):Promise<number>;
@@ -40,7 +43,7 @@ export class RoomService {
   }
   async command(command:Command) {
     const hash=await tokenHash(command.token);const now=this.clock();
-    if(!['create','join','read','heartbeat','submit','pass','start','retry','end','reject','accept','appeal','lobby','review','confirmReview','challenge','debate','vote'].includes(command.action))throw new Error('คำสั่งไม่ถูกต้อง');
+    if(!['create','join','leave','read','heartbeat','submit','pass','start','retry','end','reject','accept','appeal','lobby','review','confirmReview','challenge','debate','vote'].includes(command.action))throw new Error('คำสั่งไม่ถูกต้อง');
     if(command.action==='create') {
       const names=command.mode==='shared'&&Array.isArray(command.names)?command.names:[command.name];
       if(names.some(n=>typeof n!=='string'))throw new Error('กรุณาใส่ชื่อผู้เล่น');
@@ -52,9 +55,13 @@ export class RoomService {
       throw new Error('สร้างรหัสห้องไม่ได้ กรุณาลองอีกครั้ง');
     }
     const code=String(command.code??'').toUpperCase();if(!/^[A-Z2-9]{6}$/.test(code))throw new Error('รหัสห้องต้องมี 6 ตัว');
+    if(command.action==='leave'){
+      if(typeof command.commandId!=='string'||command.commandId.length<8||command.commandId.length>80)throw new Error('ไม่พบรหัสคำสั่ง กรุณาลองอีกครั้ง');
+      return this.leaveCommand(code,hash);
+    }
     if(command.action==='read'||command.action==='heartbeat'){
       let row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
-      const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้ กรุณาเข้าห้องอีกครั้ง');
+      const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)throw new RoomUnavailableError('คุณออกจากห้องนี้แล้ว กรุณาเข้าห้องอีกครั้ง');
       if(command.action==='heartbeat'&&!await this.store.touch(code,now))throw new RoomUnavailableError();
       if((row.game.submission&&now>=row.game.submission.until)||(row.game.continuation&&now>=row.game.continuation.at)||(row.game.status==='playing'&&((row.game.challenge?.deadline!==null&&row.game.challenge?.deadline!==undefined&&now>=row.game.challenge.deadline)||(row.game.deadline!==null&&now>=row.game.deadline)))){const updated=await this.mutate(code,g=>{advanceContinuation(g,now);advanceChallenge(g,now);advanceTimeout(g,now);});row={game:updated.game,revision:updated.revision};}
       return publicGame(row.game,row.revision,player.id,now);
@@ -123,6 +130,20 @@ export class RoomService {
     });
     if(!await this.store.touch(code,now))throw new RoomUnavailableError();
     return publicGame(updated.game,updated.revision,updated.value,now);
+  }
+  async leaveCommand(code:string,hash:string):Promise<{left:true}>{
+    for(let attempt=0;attempt<10;attempt++){
+      const row=await this.store.read(code);if(!row)return {left:true};
+      const player=row.game.players.find(p=>p.tokenHash===hash);if(!player)return {left:true};
+      // Shared-device names all belong to this one controller session.
+      if(row.game.mode==='shared'||row.game.players.length===1){
+        if(await this.store.remove(code,row.revision))return {left:true};
+      }else{
+        removeRoomPlayer(row.game,player.id,this.clock());
+        if(await this.store.write(code,row.revision,row.game)){await this.store.touch(code,this.clock());return {left:true};}
+      }
+    }
+    throw new Error('ห้องกำลังอัปเดต กรุณาลองออกจากห้องอีกครั้ง');
   }
   async submitCommand(code:string,hash:string,command:Command){
     const id=command.commandId!,text=validateWord(command.text),turn=Number(command.turn),receivedAt=this.clock();

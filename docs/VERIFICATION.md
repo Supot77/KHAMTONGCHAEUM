@@ -1,3 +1,29 @@
+# Room departure, fine Thai reading policy and shared dictionary editor — 2026-10-21
+
+Online leave removes the member and revokes the old session; ownership passes to the earliest remaining member. Active departures eliminate once and retain the five-second continuation or finish the set. Spectator departures preserve the current clock; pending sends and debates recover safely. Empty rooms and shared-device rooms are deleted with a revision guard. Only departed ID/name are retained for historical word evidence, with no departed token hash.
+
+The model prompt now explicitly requires กรุงเทพมหานคร → กรุง / เทพ / ม / หา / น / คร and มหาสมุทร → ม / หา / ส / มุทร, preserving original written spans and existing noun/title rules. New results use the v2 fine-syllable policy; cached/human-confirmed words are not bulk rewritten.
+
+Added /dictionary and authenticated /api/dictionary over the existing word_dictionary table. All current room members, including non-hosts, can edit spelling, segments and category. Membership is rechecked inside the database transaction, stale updates return 409, and dictionary/history changes roll back together. Renaming preserves the old spelling as rejected with a suggestion and never deletes legacy data. The page disables background model checks for that page instance. Existing round-review host confirmation remains separate.
+
+Related validation only: 13 room-leave tests and 10 dictionary/prompt tests passed, plus 3 selected existing review/provenance/human-overwrite regressions (26 total). Build compiled, passed TypeScript and generated 8 pages including /dictionary and /api/dictionary. No full-suite run. A test-only missing callback brace was fixed before the final passing dictionary run.
+
+Live Gemini smoke (one two-word request, no database writes):
+```json
+{"model":"gemini-3.5-flash-lite","words":[{"word":"กรุงเทพมหานคร","syllables":["กรุง","เทพ","ม","หา","น","คร"],"category":"noun"},{"word":"มหาสมุทร","syllables":["ม","หา","ส","มุทร"],"category":"noun"}],"dictionaryWrites":0,"result":"PASS"}
+```
+
+Real HTTP and Postgres transactions on the isolated Neon QA branch passed:
+```json
+{"guestDictionaryEdit":"PASS","table":"word_dictionary","syllables":["ม","หา","ส","มุทร"],"staleEditStatus":409,"hostTransfer":"PASS","departedSessionRevoked":"PASS","leaveDuringSet":"PASS","emptyAndSharedRoomsDeleted":"PASS","modelCalls":0,"result":"PASS"}
+```
+
+Two independent browser sessions also proved a non-host could save มหาสมุทร with the fine segmentation in the dictionary UI. The original host then used the actual exit dialog, returned home, disappeared from the other member's roster, and that member gained the host badge and controls. The last member exited successfully. Screenshots: word-dictionary-editor.png and room-host-transferred.png in task outputs. QA data alone was edited; no production data, schema, env variables or provider credentials were changed.
+
+The free-provider research and quota-aware routing proposal is in FREE-MODEL-ROUTING.md. Groq/OpenRouter candidates are not installed or routed to yet and their Thai accuracy was not tested. Cerebras currently documents a time-limited trial rather than an ongoing free allowance. Existing pg SSL future-compatibility advisory remains; Vercel production deployment is not verified.
+
+---
+
 # Pause clocks during word submission — 2026-10-21
 
 The UI freezes its displayed time at send, displays a spinner/pending state and prevents double submission. The server persists a bounded reservation before dictionary lookup. Other players' reads cannot time out this reserved turn. Final commit uses the current server clock for the next player's full turn budget. Lookup failures restore the reserved remainder; transport retries reuse commandId. A 3-second server receipt grace absorbs short network delay near zero; no client-supplied click timestamp is trusted. Abandoned reservations recover after 35 seconds, and late results cannot revive cancelled/ended turns. Model analysis stays asynchronous and does not pause play.

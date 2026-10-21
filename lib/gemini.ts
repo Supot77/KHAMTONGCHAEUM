@@ -57,7 +57,10 @@ export function createProvider(key:string|undefined,model=DEFAULT_MODEL,fetcher:
     if(!text)throw new AiError('โมเดลไม่ส่งผลตรวจกลับมา คำยังรอตรวจ');
     try{return JSON.parse(text);}catch{throw new AiError('อ่านผลตรวจจากโมเดลไม่ได้ กรุณาลองใหม่');}
   }
-  const segmentationInstructions=`แบ่งคำไทยเป็นพยางค์ตามการอ่าน ไม่ใช่แยกตัวอักษร เช่น ทะเล ต้องเป็น ["ทะ","เล"] ห้ามแบ่งเป็น ["ท","ะ","เล"] และ ปลาดาว ต้องเป็น ["ปลา","ดาว"] ห้ามคืนทั้งคำเป็นพยางค์เดียว
+  const segmentationInstructions=`กติกาการแบ่งละเอียด: แยกทุกพยางค์ตามการอ่าน แม้พยางค์นั้นมีเพียงพยัญชนะที่อ่านสระแฝง ห้ามรวมทั้งคำรากหรือคำย่อยเป็นหน่วยเดียวถ้าอ่านหลายพยางค์ เช่น มหา ห้ามรวมเป็นพยางค์เดียว และ สมุทร ห้ามรวมเป็นพยางค์เดียว
+ตัวอย่างบังคับ: กรุงเทพมหานคร -> ["กรุง","เทพ","ม","หา","น","คร"]; มหาสมุทร -> ["ม","หา","ส","มุทร"]; มหานคร -> ["ม","หา","น","คร"] ห้ามคืน ["กรุงเทพ","มหานคร"] หรือ ["มหา","สมุทร"]
+ม น ส ในตัวอย่างเป็นพยางค์ตามเสียงอ่านที่มีสระแฝง ไม่ใช่การสั่งให้แยกทุกพยัญชนะ: คร และ มุทร ต้องอยู่ครบตามรูปเขียน ห้ามแบ่ง กรุง เป็น ก/รุง หรือ เทพ เป็น เท/พ ห้ามเติม มะ นะ สะ คอน หมุด ลงผลลัพธ์เพราะไม่ใช่ตัวสะกดเดิม
+แบ่งคำไทยเป็นพยางค์ตามการอ่าน ไม่ใช่แยกตัวอักษร เช่น ทะเล ต้องเป็น ["ทะ","เล"] ห้ามแบ่งเป็น ["ท","ะ","เล"] และ ปลาดาว ต้องเป็น ["ปลา","ดาว"] ห้ามคืนทั้งคำเป็นพยางค์เดียวเมื่ออ่านหลายพยางค์
 You split written Thai words into syllables according to Thai reading boundaries. Return only JSON matching the schema.
 Preserve the EXACT original spelling, including tone marks, silent characters and vowel order. Each syllable is a contiguous substring of the input. Joining all substrings MUST reproduce the original word exactly. Do not transliterate, spell out pronunciation, normalize homophones, correct spelling, or remove silent letters. If an implicit vowel has no written character, do not insert it.
 Examples: ทะเล -> ["ทะ","เล"]; ปลาดาว -> ["ปลา","ดาว"]; สุนัข -> ["สุ","นัข"]; นักเรียน -> ["นัก","เรียน"]; ตลาดทุกวัน -> ["ต","ลาด","ทุก","วัน"] ห้ามตัดข้ามคำเป็น ["ตลา","ดทุ","กวัน"]; จันทร์ -> ["จันทร์"]; จันทน์ -> ["จันทน์"].

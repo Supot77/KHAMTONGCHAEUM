@@ -1,6 +1,7 @@
 'use client';
 import { useEffect,useState } from 'react';
 import { Flag,MessageCircle,Vote,LoaderCircle } from 'lucide-react';
+import {playerName} from '@/lib/player-name';
 import type { PublicGame } from '@/lib/game';
 
 type Props={game:PublicGame;busy:boolean;now:number;send:(action:string,payload?:Record<string,unknown>)=>Promise<boolean>};
@@ -10,7 +11,7 @@ export function ChallengePanel({game,busy,now,send}:Props){
   const [actor,setActor]=useState(''),[reason,setReason]=useState(''),[argument,setArgument]=useState(''),[voteActor,setVoteActor]=useState('');
   useEffect(()=>{setArgument('');},[challenge?.id,challenge?.phase]);
   const actorId=shared?(eligible.some(p=>p.id===actor)?actor:eligible[0]?.id):game.youId;
-  const name=(id:string)=>game.players.find(p=>p.id===id)?.name??'ผู้เล่น';
+  const name=(id:string)=>playerName(game,id);
   if(challenge){
     const speaker=challenge.phase==='owner'?challenge.ownerId:challenge.challengerId;
     const canSpeak=game.status==='playing'&&['owner','challenger'].includes(challenge.phase)&&(shared||game.youId===speaker);
