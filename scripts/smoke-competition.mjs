@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+if(!process.argv.includes('--allow-live'))throw new Error('Use --allow-live: post-game confirmation now requires one explicit Gemini review. Prefer a QA branch.');
 const base=process.env.GAME_TEST_URL||'http://127.0.0.1:5173';
 const status=await (await fetch(base+'/api/status')).json();if(process.argv.includes('--require-neon'))assert.equal(status.storage,'neon');
 const tokens=Array.from({length:4},()=>crypto.randomUUID()+crypto.randomUUID());let code,challengeId;
@@ -19,6 +20,7 @@ assert.equal(r.status,'ended');assert.equal(r.result.loserId,ids[0]);assert.equa
 const analysis={syllables:['ปลา'],category:'noun',nounType:'common',reason:'QA ตรวจคำนามและรูปเขียน ปลา',suggestions:[],titleContext:''};
 const proposal=await cmd(1,'review',{wordId,analysis});assert.equal(proposal.reviews[wordId].approvedId,undefined);
 await cmd(1,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id},400);
+const reviewResponse=await fetch(base+'/api/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,token:tokens[1],wordId,proposalId:proposal.reviews[wordId].id})});assert.equal(reviewResponse.status,200);const reviewed=await reviewResponse.json();assert.equal(reviewed.reviews[wordId].status,'answered');
 r=await cmd(0,'confirmReview',{wordId,proposalId:proposal.reviews[wordId].id});assert.equal(r.reviews[wordId].approvedId,proposal.reviews[wordId].id);
 // Complete all five sets using explicit host judgments in this named QA room.
 while(!(r.competition.set===5&&r.competition.setComplete)){

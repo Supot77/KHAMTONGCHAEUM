@@ -7,7 +7,7 @@ type Session={code:string;token:string};
 type ProviderStatus={configured:boolean;model:string};
 const STORAGE='khamtongchaeum-session-v1';
 async function request<T=PublicGame>(path:string,body?:unknown):Promise<T>{
-  const response=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(path==='/api/check'?55000:15000)}:{cache:'no-store'});
+  const response=await fetch(path,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(['/api/check','/api/review'].includes(path)?55000:15000)}:{cache:'no-store'});
   const data=await response.json() as T & {error?:string;code?:string};if(data.code==='ROOM_UNAVAILABLE')throw new RoomUnavailableError();if(!response.ok)throw new Error(data.error??'เชื่อมต่อไม่ได้ กรุณาลองใหม่');return data;
 }
 export function useRoom(){
@@ -51,7 +51,15 @@ export function useRoom(){
     const command={...payload,...s,action,commandId:crypto.randomUUID()};
     try{
       let next:PublicGame;
-      try{next=await request('/api/room',command);}catch(e){if(e instanceof TypeError||e instanceof DOMException)next=await request('/api/room',command);else throw e;}
+      if(action==='recheckReview')next=await request('/api/review',{...s,wordId:payload.wordId,proposalId:payload.proposalId});
+      else {
+        try{next=await request('/api/room',command);}catch(e){if(e instanceof TypeError||e instanceof DOMException)next=await request('/api/room',command);else throw e;}
+        accept(next);
+        if(action==='review'){
+          const proposal=next.reviews[String(payload.wordId)];
+          next=await request('/api/review',{...s,wordId:payload.wordId,proposalId:proposal.id});
+        }
+      }
       accept(next);return true;
     }catch(e){if(e instanceof RoomUnavailableError&&current.current?.code===s.code)resetSession(e.message);else {setError(e instanceof Error?e.message:'ส่งคำไม่ได้');void refresh();}return false;}finally{setBusy(false);}
   },[accept,refresh,resetSession]);

@@ -5,9 +5,10 @@ import { validateAnalysis, nounDecision } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
 export type Mode = 'shared' | 'online';
 export type Player = { id: string; name: string; tokenHash: string };
-export type Word = { id: string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; manual?: boolean; at: number };
+export type Verification={status:'waiting_analysis'|'waiting_previous'|'valid'|'duplicate'|'not_noun'|'review'|'manual';repeated:string[];previousId:string|null;applied:boolean};
+export type Word = { id: string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; languageStatus?:'queued'|'analyzing'|'ready'|'uncertain'|'error'; analysisSource?:'database'|'model'; verification?:Verification; manual?: boolean; at: number };
 export type ResetEvent = { id: string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
-export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; approvedId?:string};
+export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; model?:string; status?:'draft'|'checking'|'answered'|'error'|'confirming'|'approved'; requestId?:string; leaseUntil?:number; response?:{verdict:'agree'|'revise'|'uncertain';analysis:WordAnalysis;reason:string}; error?:string; approvedId?:string; approvedAnalysis?:WordAnalysis};
 export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge';at:number};
 export type Game = {
   competition?:Competition; challenge?:Challenge|null; archiveWords?:Word[];
@@ -72,7 +73,7 @@ export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:numb
 export function submitWord(game:Game,actorId:string,input:unknown,now:number,expectedTurn:number):Word {
   assertTurn(game,actorId,expectedTurn,now);const text=validateWord(input);
   if(game.chain.length>=1000) throw new Error('ครบ 1,000 คำแล้ว ให้เจ้าของห้องจบรอบแล้วเริ่มรอบใหม่');
-  const word:Word={id:crypto.randomUUID(),text,playerId:game.players[game.turnIndex].id,previousId:game.chain.at(-1)?.id??null,syllables:null,check:'pending',at:now};
+  const word:Word={id:crypto.randomUUID(),text,playerId:game.players[game.turnIndex].id,previousId:game.chain.at(-1)?.id??null,syllables:null,check:'pending',languageStatus:'queued',verification:{status:'waiting_analysis',repeated:[],previousId:game.chain.at(-1)?.id??null,applied:false},at:now};
   game.chain.push(word);game.turnIndex=nextActiveIndex(game,game.turnIndex);game.turnNumber++;game.deadline=deadline(game,now);game.notice=null;return word;
 }
 export function skipTurn(game:Game,actorId:string,now:number,expectedTurn:number) {
@@ -93,18 +94,28 @@ export function applySegments(game:Game,roundId:string,results:{id:string;syllab
   const live=results.map(r=>({result:r,word:game.chain.find(w=>w.id===r.id)})).filter(r=>r.word);
   for(const {word,result} of live)validateSyllables(word!.text,result.syllables);
   for(const {word,result} of live)word!.syllables=result.syllables;
-  for(let i=1;i<game.chain.length;i++) {
-    const current=game.chain[i],previous=game.chain[i-1];
-    if(current.manual){current.check='valid';continue;}
-    if(current.analysis){
-      const decision=nounDecision(current.analysis);
-      if(decision==='reject'){rollback(game,current.id,'not_noun',[],now);break;}
-      if(decision==='review'){current.check='review';continue;}
+  evaluateWords(game,now);
+}
+// Analyze facts separately from game consequences. Historical findings never change scores.
+export function evaluateWords(game:Game,now:number){
+  const words=roundWords(game),byId=new Map(words.map(w=>[w.id,w]));
+  for(const current of words){
+    if(!current.playerId)continue;
+    const previous=byId.get(current.previousId??'');
+    let status:Verification['status']='waiting_analysis',repeated:string[]=[];
+    if(current.manual)status='manual';
+    else if(current.analysis&&nounDecision(current.analysis)==='reject')status='not_noun';
+    else if(current.analysis&&nounDecision(current.analysis)==='review'){status='review';if(previous?.syllables&&current.syllables)repeated=duplicates(previous.syllables,current.syllables);}
+    else if(current.syllables){
+      if(!previous?.syllables)status='waiting_previous';
+      else {repeated=duplicates(previous.syllables,current.syllables);status=repeated.length?'duplicate':'valid';}
     }
-    if(!previous.syllables||!current.syllables)continue;
-    const repeated=duplicates(previous.syllables,current.syllables);
-    if(repeated.length){rollback(game,current.id,'duplicate',repeated,now);break;}
-    current.check='valid';
+    current.languageStatus=current.analysis?(current.analysis.category==='uncertain'?'uncertain':'ready'):(current.languageStatus??'queued');
+    const live=game.status==='playing'&&game.chain.some(w=>w.id===current.id);
+    const applied=(current.verification?.applied===true&&current.verification.status===status)||(live&&!['waiting_analysis','waiting_previous','review'].includes(status));
+    current.verification={status,repeated,previousId:current.previousId,applied};
+    current.check=status==='valid'||status==='manual'?'valid':status==='review'||(!live&&['duplicate','not_noun'].includes(status))?'review':current.languageStatus==='error'?'error':'pending';
+    if(live&&(status==='duplicate'||status==='not_noun'))rollback(game,current.id,status==='duplicate'?'duplicate':'not_noun',repeated,now);
   }
 }
 export function resolveManually(game:Game,id:string,now:number,syllables?:string[]) {
@@ -127,11 +138,16 @@ export function publicGame(game:Game,revision:number,youId:string,now=Date.now()
   const {processed,lease,players,archiveWords,...safe}=game;
   const challenge=game.challenge;
   const publicChallenge=challenge?(({votes,...rest})=>({...rest,votesCast:Object.keys(votes).length,votedIds:Object.keys(votes),youVote:votes[youId]??null, tally:['resolved','judging'].includes(challenge.phase)?{yes:Object.values(votes).filter(Boolean).length,no:Object.values(votes).filter(v=>!v).length}:null}))(challenge):null;
-  return {...safe,challenge:publicChallenge,reviews:game.status==='ended'?game.reviews??{}:{},chain:['playing','ended'].includes(game.status)?game.chain.slice(-1):[],wordCount:Math.max(0,game.chain.length-1),needsCheck:['playing','ended'].includes(game.status)&&roundWords(game).some(needsAnalysis),reviewWords:game.status==='ended'?roundWords(game):[],events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:game.status==='ended'?roundWords(game).filter(needsAnalysis).length:game.chain.filter(w=>w.check!=='valid').length};
+  return {...safe,challenge:publicChallenge,reviews:game.status==='ended'?game.reviews??{}:{},chain:['playing','ended'].includes(game.status)?game.chain.slice(-1):[],wordCount:Math.max(0,game.chain.length-1),needsCheck:['playing','ended'].includes(game.status)&&(analysisCandidates(game).some(needsAnalysis)||requiresVerification(game)),reviewWords:game.status==='ended'?roundWords(game):[],events:game.events.map(({removed,...event})=>event),players:scoreboard(game),revision,youId,isHost:youId===game.hostId,serverNow:now,pending:game.status==='ended'?roundWords(game).filter(needsAnalysis).length:game.chain.filter(w=>w.check!=='valid').length};
 }
 export type PublicGame = ReturnType<typeof publicGame>;
 
 export function needsAnalysis(word:Word) { return (!word.analysis && !word.manual && Boolean(word.playerId)) || (!word.syllables && !word.analysis); }
+export function analysisCandidates(game:Game):Word[]{
+  const live=game.chain.filter(needsAnalysis);
+  return game.status==='ended'?[...live,...roundWords(game).filter(w=>needsAnalysis(w)&&!live.some(x=>x.id===w.id))]:live;
+}
+export function requiresVerification(game:Game){return (game.status==='ended'?roundWords(game):game.chain).some(w=>w.playerId&&w.analysis&&!w.verification);}
 export function roundWords(game:Game):Word[] {
   return [...new Map([...(game.archiveWords??[]),...game.chain,...game.events.flatMap(e=>e.removed)].map(w=>[w.id,w])).values()];
 }
@@ -148,8 +164,7 @@ export function applyAnalyses(game:Game,roundId:string,results:{id:string;analys
   // Validate all results before any mutation. Removed words remain available for post-round review.
   const valid=live.map(r=>({word:r.word!,analysis:validateAnalysis(r.word!.text,r.analysis)}));
   for(const {word,analysis} of valid){word.analysis=analysis;word.syllables=analysis.syllables;if(!word.manual)word.check='pending';}
-  // After a round has a loser, later results are review material only.
-  if(game.status==='ended'&&game.result){for(const {word} of valid)if(!word.manual)word.check='review';return;}
+  // Still calculate historical verdicts, but evaluateWords gates all consequences on live play.
   applySegments(game,roundId,[],now);
   for(const word of game.chain)if(word.playerId&&!word.manual&&!word.analysis)word.check='pending';
 }

@@ -1,4 +1,4 @@
-// Explicit opt-in: this test makes one seed request and one segmentation request.
+// Explicit opt-in: one seed request; classification requests only for actual cache misses.
 import assert from 'node:assert/strict';
 if(!process.argv.includes('--allow-live'))throw new Error('Use --allow-live to test the configured Gemini API.');
 const base=process.env.GAME_TEST_URL||'http://127.0.0.1:5173';
@@ -14,14 +14,14 @@ assert.equal(r.status,'playing',JSON.stringify(seedCheck));assert.equal(r.chain[
 const seed=r.chain[0].text;
 const pairs=[['ปลา','ปลาดาว'],['นก','นกแก้ว'],['แมว','แมวน้ำ']];
 const [first,duplicate]=pairs.find(([word])=>!r.chain[0].syllables.includes(word));
-for(const word of [first,duplicate,'ท้องฟ้า','เมฆ'])r=await room('submit',{text:word,turn:r.turnNumber});
-assert.equal(r.wordCount,4);assert.equal(r.pending,4);assert.ok(r.deadline>r.serverNow);
+const submitted=[];for(const word of [first,duplicate,'ท้องฟ้า','เมฆ']){if(r.status!=='playing')break;r=await room('submit',{text:word,turn:r.turnNumber});submitted.push(word);}
+if(r.status==='playing')assert.ok(r.deadline>r.serverNow);
 console.log(JSON.stringify({phase:'before check',words:r.chain.map(w=>w.text),pending:r.pending,turn:r.players[r.turnIndex].name}));
 const result=await check();r=await room('read');
 if(result.error)throw new Error(result.error);
 assert.equal(r.wordCount,1);assert.equal(r.status,'ended');assert.equal(r.events.at(-1).word,duplicate);assert.equal(r.events.at(-1).previous,first);
-assert.deepEqual(r.events.at(-1).reusable.map(w=>w.text),['ท้องฟ้า','เมฆ']);assert.equal(r.turnIndex,1);
-assert.ok(r.reviewWords.some(w=>w.text==='ท้องฟ้า'));
+assert.deepEqual(r.events.at(-1).reusable.map(w=>w.text),submitted.slice(2));assert.equal(r.turnIndex,1);
+assert.ok(r.reviewWords.some(w=>w.text===duplicate));
 const survivors=r.competition.activeIds.length;
 
 console.log(JSON.stringify({phase:'after check',seed,chain:r.chain.map(w=>w.text),culprit:r.events.at(-1).playerName,repeated:r.events.at(-1).syllables,reusable:r.events.at(-1).reusable.map(w=>w.text),survivors,elimination:'PASS',summary:'PASS',result:'PASS'}));

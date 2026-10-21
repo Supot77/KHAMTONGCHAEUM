@@ -2,7 +2,7 @@ import { RoomUnavailableError } from './room-lifecycle.ts';
 import { advanceChallenge,openChallenge,debate,castVote,resolveChallenge } from './challenge.ts';
 import { validateAnalysis } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
-import { createGame, startRound, submitWord, skipTurn, advanceTimeout, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, roundWords, rollback, resolveManually, appealReset } from './game.ts';
+import { createGame, startRound, submitWord, skipTurn, advanceTimeout, publicGame, validateName, validateWord, applyAnalyses, needsAnalysis, analysisCandidates, requiresVerification, roundWords, rollback, resolveManually, appealReset } from './game.ts';
 import type { Game } from './game.ts';
 import { AiError } from './gemini.ts';
 import type { LanguageProvider } from './gemini.ts';
@@ -14,11 +14,13 @@ export interface RoomStore {
   touch(code:string,now:number):Promise<boolean>;
   pruneExpired(now:number):Promise<number>;
   analyses(model:string,words:string[]):Promise<Record<string,WordAnalysis>>;
-  saveAnalyses(model:string,entries:Record<string,WordAnalysis>,source?:'model'|'players'):Promise<void>;
+  saveAnalyses(model:string,entries:Record<string,WordAnalysis>,source?:'model'|'players',metadata?:Record<string,string>):Promise<void>;
+  claimAnalyses(words:string[],leaseId:string,until:number,now:number):Promise<string[]>;
+  releaseAnalyses(words:string[],leaseId:string):Promise<void>;
   cached(model:string,words:string[]):Promise<Record<string,string[]>>;
   cache(model:string,entries:Record<string,string[]>):Promise<void>;
 }
-export type Command={action:string;code?:string;token?:string;commandId?:string;name?:unknown;names?:unknown;mode?:unknown;seconds?:unknown;text?:unknown;turn?:unknown;wordId?:unknown;eventId?:unknown;manual?:unknown;syllables?:unknown;analysis?:unknown;proposalId?:unknown;actorId?:unknown;reason?:unknown;finish?:unknown;connected?:unknown;challengeId?:unknown};
+export type Command={action:string;code?:string;token?:string;commandId?:string;name?:unknown;names?:unknown;mode?:unknown;seconds?:unknown;text?:unknown;turn?:unknown;wordId?:unknown;eventId?:unknown;manual?:unknown;syllables?:unknown;analysis?:unknown;proposalId?:unknown;actorId?:unknown;reason?:unknown;finish?:unknown;connected?:unknown;challengeId?:unknown;useModel?:unknown};
 export async function tokenHash(token:unknown):Promise<string> {
   if(typeof token!=='string'||token.length<32||token.length>160)throw new Error('เซสชันไม่ถูกต้อง กรุณาเข้าห้องอีกครั้ง');
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
@@ -57,17 +59,13 @@ export class RoomService {
       return publicGame(row.game,row.revision,player.id,now);
     }
     if(typeof command.commandId!=='string'||command.commandId.length<8||command.commandId.length>80)throw new Error('ไม่พบรหัสคำสั่ง กรุณาลองอีกครั้ง');
-    let confirmed:import('./game.ts').Review|undefined;
-    if(command.action==='confirmReview'){
-      const row=await this.store.read(code);const g=row?.game;
-      if(!g||g.players.find(p=>p.tokenHash===hash)?.id!==g.hostId)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
-      if(g.status!=='ended')throw new Error('ยืนยันข้อมูลคำได้หลังจบรอบเท่านั้น');
-      confirmed=g.reviews?.[String(command.wordId)];
-      const word=roundWords(g).find(w=>w.id===command.wordId);
-      if(!confirmed||!word||confirmed.id!==command.proposalId)throw new Error('ข้อเสนอเปลี่ยนแล้ว กรุณาตรวจทานอีกครั้ง');
-      const analysis=validateAnalysis(word.text,confirmed.analysis);
-      if(analysis.category==='uncertain')throw new Error('เลือกประเภทคำให้ชัดเจนก่อนบันทึก');
-      await this.store.saveAnalyses(this.provider.model,{[word.text]:analysis},'players');
+    if(command.action==='confirmReview')return this.confirmReview(code,hash,command);
+    // Cache hits are independent of model readiness, cooldown and in-flight jobs.
+    let cached:WordAnalysis|undefined;
+    if(command.action==='submit'){
+      const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
+      if(!row.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
+      if(!row.game.manual){const text=validateWord(command.text);cached=(await this.store.analyses(this.provider.model,[text]))[text];}
     }
     const updated=await this.mutate(code,game=>{
       let player=game.players.find(p=>p.tokenHash===hash);
@@ -80,6 +78,7 @@ export class RoomService {
       }
       if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
       if(game.processed.includes(command.commandId!))return player.id;
+      if(['start','lobby'].includes(command.action)&&Object.values(game.reviews??{}).some(r=>r.status==='confirming'&&(r.leaseUntil??0)>now))throw new Error('กำลังบันทึกฐานคำ กรุณารอสักครู่');
       advanceChallenge(game,now);
       const host=player.id===game.hostId;
       const actor=game.mode==='shared'&&host&&typeof command.actorId==='string'?command.actorId:player.id;
@@ -88,7 +87,7 @@ export class RoomService {
       if(command.action==='debate')debate(game,actor,command.text,command.finish===true,now);
       if(command.action==='vote')castVote(game,actor,command.connected,now);
       if(['start','retry','end','reject','accept','appeal','lobby','confirmReview'].includes(command.action)&&!host)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
-      if(command.action==='submit')submitWord(game,player.id,command.text,now,Number(command.turn));
+      if(command.action==='submit'){const word=submitWord(game,player.id,command.text,now,Number(command.turn));if(cached&&!game.manual){word.analysisSource='database';applyAnalyses(game,game.roundId,[{id:word.id,analysis:cached}],now);}}
       if(command.action==='pass')skipTurn(game,player.id,now,Number(command.turn));
       if(command.action==='start'){
         if(game.status!=='lobby'&&game.status!=='ended')throw new Error('เกมเริ่มแล้ว');
@@ -107,29 +106,92 @@ export class RoomService {
         if(game.status!=='ended')throw new Error('ตรวจทานคำได้หลังจบรอบเท่านั้น');
         const word=roundWords(game).find(w=>w.id===command.wordId);if(!word)throw new Error('ไม่พบคำนี้ในรอบ');
         const analysis=validateAnalysis(word.text,command.analysis);
-        game.reviews??={};game.reviews[word.id]={id:crypto.randomUUID(),wordId:word.id,playerId:player.id,analysis};
-      }
-      if(command.action==='confirmReview'&&confirmed){
-        const proposal=game.reviews?.[confirmed.wordId];
-        if(proposal?.id===confirmed.id)proposal.approvedId=confirmed.id;
+        if(game.reviews?.[word.id]?.status==='confirming'&&(game.reviews[word.id].leaseUntil??0)>now)throw new Error('กำลังบันทึกคำนี้ กรุณารอสักครู่');
+        game.reviews??={};game.reviews[word.id]={id:crypto.randomUUID(),wordId:word.id,playerId:player.id,analysis,status:'draft'};
       }
       game.processed=[...game.processed,command.commandId!].slice(-300);return player.id;
     });
     if(!await this.store.touch(code,now))throw new RoomUnavailableError();
     return publicGame(updated.game,updated.revision,updated.value,now);
   }
+  async hydrateCached(code:string,hash:string){
+    const row=await this.store.read(code);if(!row)throw new RoomUnavailableError();
+    if(!row.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
+    if(row.game.manual||!['playing','ended'].includes(row.game.status))return;
+    const words=analysisCandidates(row.game).slice(0,100);
+    const verify=requiresVerification(row.game);
+    if(!words.length&&!verify)return;
+    const entries=await this.store.analyses(this.provider.model,[...new Set(words.map(w=>w.text))]);
+    const hits=words.filter(w=>Object.hasOwn(entries,w.text));if(!hits.length&&!verify)return;
+    await this.mutate(code,game=>{
+      if(game.roundId!==row.game.roundId)return;
+      const current=roundWords(game);
+      const usable=hits.filter(w=>current.some(x=>x.id===w.id&&!x.analysis&&!x.manual));
+      for(const hit of usable)current.find(w=>w.id===hit.id)!.analysisSource='database';
+      applyAnalyses(game,game.roundId,usable.map(w=>({id:w.id,analysis:entries[w.text]})),this.clock());
+    });
+  }
+  async review(code:string,token:string,wordId:string,proposalId:string){
+    const hash=await tokenHash(token),requestId=crypto.randomUUID();let claimed=false;
+    const state=await this.mutate(code,game=>{
+      claimed=false;
+      const player=game.players.find(p=>p.tokenHash===hash);if(!player)throw new Error('คุณไม่ได้อยู่ในห้องนี้');
+      if(game.status!=='ended')throw new Error('ขอตรวจใหม่ได้หลังจบช่วงคำเท่านั้น');
+      const proposal=game.reviews?.[wordId];if(!proposal||proposal.id!==proposalId)throw new Error('ข้อเสนอเปลี่ยนแล้ว กรุณาส่งใหม่');
+      if(proposal.status==='answered'||proposal.status==='approved'||proposal.status==='confirming'||(proposal.status==='checking'&&(proposal.leaseUntil??0)>this.clock()))return player.id;
+      if(!this.provider.configured)throw new Error('ยังไม่ได้ตั้งค่า Gemini API Key');
+      proposal.status='checking';proposal.model=this.provider.model;proposal.requestId=requestId;proposal.leaseUntil=this.clock()+65000;proposal.error=undefined;claimed=true;return player.id;
+    });
+    if(!claimed)return publicGame(state.game,state.revision,state.value,this.clock());
+    const proposal=state.game.reviews![wordId],word=roundWords(state.game).find(w=>w.id===wordId)!;
+    try{
+      const response=await this.provider.reviewAnalysis({word:word.text,original:word.analysis??null,proposal:proposal.analysis});
+      const analysis=validateAnalysis(word.text,response.analysis);
+      if(!['agree','revise','uncertain'].includes(response.verdict)||!response.reason?.trim()||response.reason.length>500)throw new Error('รูปแบบคำตอบตรวจทานไม่ถูกต้อง');
+      const updated=await this.mutate(code,game=>{const r=game.reviews?.[wordId];if(game.roundId!==state.game.roundId||r?.id!==proposalId||r.requestId!==requestId)return;r.status='answered';r.response={...response,analysis};r.error=undefined;});
+      return publicGame(updated.game,updated.revision,state.value,this.clock());
+    }catch(error){
+      const updated=await this.mutate(code,game=>{const r=game.reviews?.[wordId];if(game.roundId!==state.game.roundId||r?.id!==proposalId||r.requestId!==requestId)return;r.status='error';r.error=error instanceof Error?error.message:'ตรวจทานไม่สำเร็จ กรุณาลองใหม่';});
+      return publicGame(updated.game,updated.revision,state.value,this.clock());
+    }
+  }
+  async confirmReview(code:string,hash:string,command:Command){
+    const wordId=String(command.wordId),proposalId=String(command.proposalId),useModel=command.useModel!==false;
+    const state=await this.mutate(code,game=>{
+      const player=game.players.find(p=>p.tokenHash===hash);if(player?.id!==game.hostId)throw new Error('คำสั่งนี้สำหรับเจ้าของห้องเท่านั้น');
+      if(game.status!=='ended')throw new Error('ยืนยันข้อมูลคำได้หลังจบช่วงคำเท่านั้น');
+      const r=game.reviews?.[wordId];if(!r||r.id!==proposalId)throw new Error('ข้อเสนอเปลี่ยนแล้ว กรุณาตรวจทานอีกครั้ง');
+      if(r.approvedId===r.id)return player.id;
+      if(r.status==='confirming'&&(r.leaseUntil??0)>this.clock())throw new Error('กำลังบันทึก กรุณารอสักครู่');
+      if(r.status==='confirming')r.status='answered';
+      if(r.status!=='answered'||!r.response)throw new Error('รอคำตอบจากโมเดลก่อนยืนยันฐานคำ');
+      const word=roundWords(game).find(w=>w.id===wordId)!;
+      if(useModel&&r.response.verdict==='uncertain')throw new Error('โมเดลยังไม่แน่ใจ ให้ตรวจข้อเสนอของผู้เล่นก่อนยืนยัน');
+      const analysis=validateAnalysis(word.text,useModel?r.response.analysis:r.analysis);
+      if(analysis.category==='uncertain')throw new Error('เลือกประเภทคำให้ชัดเจนก่อนบันทึก');
+      r.approvedAnalysis=analysis;r.status='confirming';r.leaseUntil=this.clock()+90000;return player.id;
+    });
+    const r=state.game.reviews![wordId];if(r.approvedId===r.id)return publicGame(state.game,state.revision,state.value,this.clock());
+    const word=roundWords(state.game).find(w=>w.id===wordId)!;
+    try{
+      await this.store.saveAnalyses(r.model??this.provider.model,{[word.text]:r.approvedAnalysis!},'players',{roomCode:code,playerId:state.value,proposalId});
+      const updated=await this.mutate(code,game=>{const current=game.reviews?.[wordId];if(current?.id===proposalId){current.status='approved';current.approvedId=proposalId;}});
+      await this.store.touch(code,this.clock());return publicGame(updated.game,updated.revision,state.value,this.clock());
+    }catch(error){await this.mutate(code,game=>{const current=game.reviews?.[wordId];if(current?.id===proposalId&&current.status==='confirming')current.status='answered';});throw error;}
+  }
   async check(code:string,token:string) {
     const hash=await tokenHash(token);const now=this.clock();
     let job:{id:string;roundId:string;seed:boolean;words:{id:string;text:string}[];judgeId?:string}|undefined;
     // No read-only busy request writes to the database. Claim only after finding actual work.
+    await this.hydrateCached(code,hash);
     const existing=await this.store.read(code);if(!existing)throw new RoomUnavailableError();
     if(!existing.game.players.some(p=>p.tokenHash===hash))throw new Error('คุณไม่ได้อยู่ในห้องนี้');
-    const ready=(g:Game)=>this.provider.configured&&g.nextCheckAt<=now&&(!g.lease||g.lease.until<=now)&&((g.status==='playing'&&g.challenge?.phase==='judging')||(!g.manual&&(g.status==='starting'||(['playing','ended'].includes(g.status)&&roundWords(g).some(needsAnalysis)))));
+    const ready=(g:Game)=>this.provider.configured&&g.nextCheckAt<=now&&(!g.lease||g.lease.until<=now)&&((g.status==='playing'&&g.challenge?.phase==='judging')||(!g.manual&&(g.status==='starting'||(['playing','ended'].includes(g.status)&&analysisCandidates(g).some(needsAnalysis)))));
     if(!ready(existing.game))return {checked:false};
     await this.mutate(code,game=>{
       job=undefined;if(!ready(game))return;
       const id=crypto.randomUUID();game.lease={id,roundId:game.roundId,until:now+65000};
-      job={id,roundId:game.roundId,seed:game.status==='starting',judgeId:game.challenge?.phase==='judging'?game.challenge.id:undefined,words:game.challenge?.phase==='judging'?[]:roundWords(game).filter(needsAnalysis).slice(0,6).map(w=>({id:w.id,text:w.text}))};
+      job={id,roundId:game.roundId,seed:game.status==='starting',judgeId:game.challenge?.phase==='judging'?game.challenge.id:undefined,words:game.challenge?.phase==='judging'?[]:analysisCandidates(game).slice(0,6).map(w=>({id:w.id,text:w.text}))};
     });
     if(!job)return {checked:false};const claimed=job;
     try {
@@ -145,13 +207,32 @@ export class RoomService {
         await this.mutate(code,game=>{if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id||game.status!=='starting')return;startRound(game,seed,this.clock());game.chain[0].analysis=analysis;});
       } else {
         const words=[...new Set(claimed.words.map(w=>w.text))];
-        const entries=await this.store.analyses(this.provider.model,words);const missing=words.filter(w=>!Object.hasOwn(entries,w));
-        if(missing.length){const fresh=await this.provider.analyze(missing);await this.store.saveAnalyses(this.provider.model,fresh);Object.assign(entries,fresh);}
+        const entries=await this.store.analyses(this.provider.model,words);
+        // Apply every hit before making any slow external request.
         await this.mutate(code,game=>{
           if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id)return;
-          applyAnalyses(game,claimed.roundId,claimed.words.map(w=>({id:w.id,analysis:entries[w.text]})),this.clock());
-          game.lease=null;game.aiError=null;game.nextCheckAt=this.clock()+4000;
+          applyAnalyses(game,claimed.roundId,claimed.words.filter(w=>Object.hasOwn(entries,w.text)).map(w=>({id:w.id,analysis:entries[w.text]})),this.clock());
         });
+        const missing=words.filter(w=>!Object.hasOwn(entries,w));
+        const owned=await this.store.claimAnalyses(missing,claimed.id,this.clock()+65000,this.clock());
+        try{
+          // Re-read after claiming: another room may have completed between lookup and claim.
+          Object.assign(entries,await this.store.analyses(this.provider.model,owned));
+          const freshWords=owned.filter(w=>!Object.hasOwn(entries,w));
+          if(freshWords.length){
+            await this.mutate(code,game=>{if(game.roundId===claimed.roundId&&game.lease?.id===claimed.id)for(const w of analysisCandidates(game))if(freshWords.includes(w.text))w.languageStatus='analyzing';});
+            const fresh=await this.provider.analyze(freshWords);await this.store.saveAnalyses(this.provider.model,fresh);
+          }
+          // The database may now hold a human correction; never apply a stale model draft over it.
+          Object.assign(entries,await this.store.analyses(this.provider.model,words));
+          await this.mutate(code,game=>{
+            if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id)return;
+            for(const word of roundWords(game))if(claimed.words.some(w=>w.id===word.id)&&!word.analysis)word.analysisSource=freshWords.includes(word.text)?'model':'database';
+            applyAnalyses(game,claimed.roundId,claimed.words.filter(w=>Object.hasOwn(entries,w.text)).map(w=>({id:w.id,analysis:entries[w.text]})),this.clock());
+            game.lease=null;game.aiError=null;game.nextCheckAt=this.clock()+(words.some(w=>!Object.hasOwn(entries,w))?1000:4000);
+          });
+        }finally{await this.store.releaseAnalyses(owned,claimed.id);}
+
       }
       return {checked:true};
     }catch(error){
@@ -159,7 +240,7 @@ export class RoomService {
       await this.mutate(code,game=>{
         if(game.roundId!==claimed.roundId||game.lease?.id!==claimed.id)return;
         game.lease=null;game.aiError=message;game.nextCheckAt=this.clock()+(error instanceof AiError?error.retryAfter:30000);
-        for(const word of roundWords(game))if(claimed.words.some(w=>w.id===word.id)&&!word.manual)word.check='error';
+        for(const word of roundWords(game))if(claimed.words.some(w=>w.id===word.id)&&!word.manual&&!word.analysis){word.check='error';word.languageStatus='error';}
       });
       return {checked:false,error:message};
     }

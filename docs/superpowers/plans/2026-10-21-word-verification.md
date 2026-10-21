@@ -1,0 +1,14 @@
+# Word verification implementation plan
+
+**Approved scope:** The user's six-point approval in chat: immediate exact-word cache checks, independent language/game states, order-independent adjacent comparison and historical-only findings, shared dictionary with provenance/history and cross-room claims, explicit model review before human confirmation, and five-set regression verification.
+
+**Architecture:** Preserve the existing Next.js routes, RoomService CAS writes, pg/SQLite adapters, game timing, scoring and human semantic challenges. Add an authoritative exact-word dictionary alongside the untouched legacy cache, append-only analysis history and expiring per-word claims. Cache hits run inside submit/hydration independently of model jobs. Reviews use an authenticated request route and immutable proposal IDs.
+
+**Constraints:** Written homophones remain distinct; normalize only NFC and outer whitespace. Never pause turns for AI. Preserve existing data and human-confirmed analyses. No automatic paid model switch. Review model answers do not change scores or the dictionary until host confirmation. Model errors remain visible and retryable. Existing room expiry remains one hour.
+
+- [x] Task 1 — SQL dictionary: add tables/backfill in `database/schema.sql`; implement exact-word reads, protected upserts, history and lease claim/release in `lib/sql-store.ts`; verify SQLite migration/model-switch/human-protection/concurrency in `tests/pipeline.test.mjs`, then test migration on a Neon development branch before production.
+- [x] Task 2 — Runtime checks: add language/verification states and evaluate adjacent pairs through `lib/game.ts`; hydrate cached submissions in `lib/rooms.ts` before model readiness/backoff; process active words ahead of historical jobs and apply cached results before waiting for model; verify delayed, reversed, uncertain, ended and all-five-set cases.
+- [x] Task 3 — Review: add `reviewAnalysis` to `lib/gemini.ts`, request lifecycle and proposal guards to `lib/rooms.ts`, authenticated `app/api/review/route.ts`, request/retry/result/confirmation controls in `round-review.tsx` and `use-room.ts`; verify stale proposals, auth, errors/retries, human confirmation and zero pre-confirmation dictionary writes.
+- [x] Task 4 — Delivery: run all tests/typecheck/build, start production app, exercise real Neon HTTP cache hits and real Gemini review; inspect desktop/mobile review UI, update README/WORD-CHECKING/VERIFICATION, scan staged files for secrets and push reviewed changes.
+
+Regression fixtures use explicit QA names, fake providers for adversarial timing and real SQL for persistence. Live checks must distinguish real Gemini output from deterministic test doubles. Record command results and any remaining deployment boundary in the verification report.

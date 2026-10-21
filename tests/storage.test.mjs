@@ -24,7 +24,7 @@ test('analysis cache keeps classifications, negatives, and player corrections ac
  const db=new DatabaseSync(':memory:');db.exec(readFileSync(new URL('../database/schema.sql',import.meta.url),'utf8'));const store=createSqlStore(async(q,p)=>db.prepare(q).all(...p));
  const noun={syllables:['ปลา'],category:'noun',nounType:'common',reason:'คำนาม',suggestions:[],titleContext:''};
  const verb={syllables:['วิ่ง'],category:'verb',nounType:'none',reason:'คำกริยา',suggestions:['การวิ่ง'],titleContext:''};
- await store.saveAnalyses('m',{'ปลา':noun,'วิ่ง':verb});assert.deepEqual(await store.analyses('m',['วิ่ง']),{'วิ่ง':verb});assert.deepEqual(await store.analyses('other',['วิ่ง']),{});
+ await store.saveAnalyses('m',{'ปลา':noun,'วิ่ง':verb});assert.deepEqual(await store.analyses('m',['วิ่ง']),{'วิ่ง':verb});assert.deepEqual(await store.analyses('other',['วิ่ง']),{'วิ่ง':verb});
  const corrected={...noun,reason:'ผู้เล่นยืนยัน'};await store.saveAnalyses('m',{'ปลา':corrected},'players');await store.saveAnalyses('m',{'ปลา':noun});assert.deepEqual(await store.analyses('m',['ปลา']),{'ปลา':corrected});
  const unknown={...noun,category:'uncertain',nounType:'none'};await store.saveAnalyses('m',{'ปลา':unknown});assert.deepEqual(await store.analyses('m',['ปลา']),{'ปลา':corrected});db.close();
 });

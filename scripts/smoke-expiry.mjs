@@ -18,7 +18,7 @@ async function create(label){const token=crypto.randomUUID()+crypto.randomUUID()
 try{
  const expired=await create('หมดอายุ'),active=await create('ยังใช้');
  const count=async()=>{
-  const {rows}=await pool.query("SELECT to_regclass('public.syllable_cache') IS NOT NULL AS legacy_exists, (SELECT count(*)::int FROM word_analysis_cache) AS analyses");
+  const {rows}=await pool.query("SELECT to_regclass('public.syllable_cache') IS NOT NULL AS legacy_exists, (SELECT count(*)::int FROM word_dictionary) AS analyses");
   const legacy=rows[0].legacy_exists?(await pool.query('SELECT count(*)::int AS n FROM syllable_cache')).rows[0].n:null;
   return {legacy,analyses:rows[0].analyses};
  };

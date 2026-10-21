@@ -4,7 +4,7 @@ import { RoomService } from '../lib/rooms.ts';
 import { createProvider,parseSegments,AiError } from '../lib/gemini.ts';
 
 class MemoryStore{
-  rows=new Map();words={};facts={};writes=0;
+  rows=new Map();words={};facts={};writes=0;claims=new Map();
   async read(code){const row=this.rows.get(code);return row?structuredClone(row):null;}
   async insert(game){if(this.rows.has(game.code))return false;this.rows.set(game.code,{game:structuredClone(game),revision:0});return true;}
   async write(code,revision,game){if(this.rows.get(code)?.revision!==revision)return false;this.rows.set(code,{game:structuredClone(game),revision:revision+1});return true;}
@@ -12,12 +12,14 @@ class MemoryStore{
   async pruneExpired(){return 0;}
   async analyses(model,words){return Object.fromEntries(words.filter(w=>this.facts[w]).map(w=>[w,this.facts[w].analysis]));}
   async saveAnalyses(model,entries,source='model'){for(const [word,analysis] of Object.entries(entries)){if(this.facts[word]?.source==='players'&&source==='model')continue;this.facts[word]={analysis:structuredClone(analysis),source};this.writes++;}}
+  async claimAnalyses(words,id,until,now){return words.filter(w=>{const old=this.claims.get(w);if(old&&old.until>now)return false;this.claims.set(w,{id,until});return true;});}
+  async releaseAnalyses(words,id){for(const w of words)if(this.claims.get(w)?.id===id)this.claims.delete(w);}
   async cached(model,words){return Object.fromEntries(words.filter(w=>this.words[w]).map(w=>[w,this.words[w]]));}
   async cache(model,entries){Object.assign(this.words,entries);}
 }
 const token=()=>crypto.randomUUID()+crypto.randomUUID();
 const cmd=(action,rest={})=>({action,commandId:crypto.randomUUID(),...rest});
-const basicProvider=()=>({configured:true,model:'test',seed:async()=>({text:'ทะเล',syllables:['ทะ','เล']}),analyze:async function(words){return Object.fromEntries(Object.entries(await this.segment(words)).map(([word,syllables])=>[word,{syllables,category:'noun',nounType:'common',reason:'คำนาม',suggestions:[],titleContext:''}]));},segment:async words=>Object.fromEntries(words.map(w=>[w,({'ปลา':['ปลา'],'ปลาดาว':['ปลา','ดาว'],'เมฆ':['เมฆ'],'ท้องฟ้า':['ท้อง','ฟ้า']})[w]??[w]]))});
+const basicProvider=()=>({configured:true,model:'test',reviewAnalysis:async({proposal})=>({verdict:'agree',analysis:proposal,reason:'โมเดลตรวจแล้ว'}),seed:async()=>({text:'ทะเล',syllables:['ทะ','เล']}),analyze:async function(words){return Object.fromEntries(Object.entries(await this.segment(words)).map(([word,syllables])=>[word,{syllables,category:'noun',nounType:'common',reason:'คำนาม',suggestions:[],titleContext:''}]));},segment:async words=>Object.fromEntries(words.map(w=>[w,({'ปลา':['ปลา'],'ปลาดาว':['ปลา','ดาว'],'เมฆ':['เมฆ'],'ท้องฟ้า':['ท้อง','ฟ้า']})[w]??[w]]))});
 async function shared(provider=basicProvider()){
   let now=1000;const store=new MemoryStore(),service=new RoomService(store,provider,()=>now),key=token();
   const room=await service.command(cmd('create',{mode:'shared',names:['เอ','บี','ซี'],token:key,seconds:30}));
@@ -81,7 +83,7 @@ test('post-round proposals are not global writes until host confirms; confirmed 
  const f=await shared();let r=await f.read();r=await f.service.command(cmd('submit',{...f.auth,text:'ปลา',turn:r.turnNumber}));const wordId=r.chain[0].id;await f.service.command(cmd('end',f.auth));
  const analysis={syllables:['ปลา'],category:'noun',nounType:'common',reason:'ผู้เล่นยืนยัน',suggestions:[],titleContext:''};const writes=f.store.writes;
  r=await f.service.command(cmd('review',{...f.auth,wordId,analysis}));assert.equal(f.store.writes,writes);
- const proposal=r.reviews[wordId];r=await f.service.command(cmd('confirmReview',{...f.auth,wordId,proposalId:proposal.id}));assert.equal(f.store.facts['ปลา'].source,'players');assert.equal(r.reviews[wordId].approvedId,proposal.id);
+ const proposal=r.reviews[wordId];await f.service.review(f.auth.code,f.auth.token,wordId,proposal.id);r=await f.service.command(cmd('confirmReview',{...f.auth,wordId,proposalId:proposal.id}));assert.equal(f.store.facts['ปลา'].source,'players');assert.equal(r.reviews[wordId].approvedId,proposal.id);
  await f.store.saveAnalyses('test',{'ปลา':{...analysis,reason:'ผลโมเดลที่มาช้า'}});assert.equal(f.store.facts['ปลา'].analysis.reason,'ผู้เล่นยืนยัน');
  await f.service.command(cmd('lobby',f.auth));await f.service.command(cmd('start',f.auth));await f.service.check(r.code,f.auth.token);r=await f.read();assert.equal(r.roundNumber,1);
  await f.service.command(cmd('submit',{...f.auth,text:'ปลา',turn:r.turnNumber}));await f.service.check(r.code,f.auth.token);r=await f.read();assert.equal(r.chain[0].analysis.reason,'ผู้เล่นยืนยัน');
@@ -92,7 +94,7 @@ test('online guest can propose but only host can update the shared dictionary',a
  await service.command(cmd('join',{...guest,name:'บี'}));await service.command(cmd('start',{...host,manual:true,text:'ทะเล'}));let r=await service.command(cmd('submit',{...host,text:'ปลา',turn:(await service.command({action:'read',...host})).turnNumber}));const wordId=r.chain[0].id;
  await service.command(cmd('end',host));const analysis={syllables:['ปลา'],category:'noun',nounType:'common',reason:'ถูกต้อง',suggestions:[],titleContext:''};r=await service.command(cmd('review',{...guest,wordId,analysis}));const proposalId=r.reviews[wordId].id;
  await assert.rejects(()=>service.command(cmd('confirmReview',{...guest,wordId,proposalId})),/เจ้าของห้อง/);assert.equal(store.facts['ปลา'],undefined);
- await service.command(cmd('confirmReview',{...host,wordId,proposalId}));assert.equal(store.facts['ปลา'].source,'players');
+ await service.review(host.code,host.token,wordId,proposalId);await service.command(cmd('confirmReview',{...host,wordId,proposalId}));assert.equal(store.facts['ปลา'].source,'players');
 });
 
 test('tie invokes model only after votes, even with manual word checks; online actor spoofing fails',async()=>{

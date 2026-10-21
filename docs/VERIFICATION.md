@@ -1,3 +1,82 @@
+# Word verification pipeline — 2026-10-21
+
+This is the current report for the cache-first runtime and explicit model-review upgrade. Earlier reports below describe previous versions. The overnight set-4 incident cannot be conclusively reconstructed from the surviving evidence; the change addresses verified queue coupling, missing verdict visibility and incomplete five-set coverage rather than claiming a proven single root cause.
+
+## Changes
+
+- Exact-word dictionary reads happen on submit, independently of model configuration, in-flight jobs or backoff. Known non-nouns return type/reason/suggestions immediately; known nouns compare as soon as their neighbor is ready.
+- Language status and game verdict are separate. Reverse arrival rechecks dependent neighbors; ended phases retain explicit historical findings without changing scores. Pre-upgrade facts missing a new verdict are reconciled without model calls.
+- Active words take priority over archived work. Per-word SQL claims prevent ordinary concurrent-room duplicate requests; leases expire for crash recovery. Final application re-reads authoritative data to protect human corrections.
+- Added model-independent `word_dictionary`, append-only `word_analysis_history` and expiring `word_analysis_jobs`. Legacy tables are preserved. Application pg/SQLite adapters transact dictionary/history writes together.
+- Added authenticated `/api/review`, persisted request/answer/error states, stale proposal guards, retry, side-by-side proposal/model result, and explicit host confirmation. Model review alone never writes the dictionary. New stable UI keys preserve the expanded form and edits while responses arrive.
+
+## Deterministic tests and build
+
+`npm test`: **65 tests, 65 passed, 0 failed**. This includes 22 new regressions exercising immediate cache hits without a key or during cooldown, reverse results, independent cache progress while a model call is in flight, automatic five-set cached/new-word elimination, historical findings, live-word priority, cross-room single-flight, uncertain/error handling, exact written homophones, migration idempotency, provenance rollback, human overwrite protection, authenticated reviews, failure/retry, stale requests and model revisions.
+
+`npm run typecheck` passed. Production `npm run build` passed with routes `/`, `/api/check`, `/api/review`, `/api/room`, `/api/status`, `/_not-found`. Final output after the last source change:
+
+```text
+ℹ tests 65
+ℹ pass 65
+ℹ fail 0
+✓ Compiled successfully in 735ms
+Finished TypeScript in 1990ms
+✓ Generating static pages using 8 workers (6/6) in 769ms
+```
+
+The final production build was started with `npm start` on port 5173: `Ready in 164ms`. A direct production read through the final SQL adapter also confirmed the existing word แมว is found under a different model name and a missing-word lookup succeeds.
+
+## Migration on Neon QA branch, then production
+
+Created the isolated branch `qa-word-pipeline-20261021` (`br-silent-sky-az8af4ee`) from the existing production branch. It expires automatically at `2026-10-22T23:59:00Z`. The user's env files and CLI context were not replaced.
+
+Ran the versioned schema through `scripts/verify-word-migration.mjs` on that branch, then applied the same migration to production. Both reported:
+
+```json
+{"legacyRows":138,"legacyUnchanged":"PASS","dictionary":138,"history":138,"modelIndependentRead":"PASS","humanProtection":"PASS","globalLease":"PASS","qaWritesRolledBack":true,"result":"PASS"}
+```
+
+The legacy cache was hashed before and after migration to prove its contents remained unchanged. PostgreSQL tests of reads across model names, protected human upserts and lease ownership used transaction-rollback fixtures. No user word was deleted or overwritten by those fixtures. The added tables and backfill remain on production for the new app.
+
+## Real Neon/Gemini HTTP five-set proof
+
+Started the production build against the isolated Neon QA branch on port 5174 (`Ready in 140ms`; final UI build restart `Ready in 183ms`). `node scripts/smoke-word-pipeline.mjs --allow-live` returned:
+
+```json
+{"sets":[{"set":1,"seed":"ช้าง","word":"ปลาดาว","source":"database","result":"duplicate"},{"set":2,"seed":"เรือ","word":"ปลาดาว","source":"database","result":"duplicate"},{"set":3,"seed":"เรือ","word":"ปลาดาว","source":"database","result":"duplicate"},{"set":4,"seed":"เรือ","word":"ปลาดาว","source":"database","result":"duplicate"},{"set":5,"seed":"เรือ","word":"ปลาดาว","source":"database","result":"duplicate"}],"cacheHits":10,"review":{"verdict":"revise","syllables":["ปลา","ดาว"],"reason":"ผู้เล่นเสนอให้รวมเป็นพยางค์เดียว ซึ่งขัดกับหลักการแบ่งพยางค์ตามการอ่าน จึงต้องแก้ไขกลับเป็นสองพยางค์"},"explicitHumanConfirmation":"PASS","scoresFrozenDuringReview":"PASS","scores":[15,5],"result":"PASS"}
+```
+
+Gemini supplied all five seeds and the actual review response. The ten cached word submissions did not call classification. Separate deterministic five-set tests mix cached nouns and new deferred-model words, so the HTTP cache-only result is not represented as proof of all asynchronous timings.
+
+## Browser proof and genuine new-word analysis
+
+Through the actual UI, created a named QA room, started normal automatic mode, submitted a cached noun, submitted the previously absent word กล้องจุลทรรศน์อิเล็กตรอน, and observed it classified and segmented by the actual model. A read of the QA dictionary confirmed:
+
+```json
+{"newWord":"กล้องจุลทรรศน์อิเล็กตรอน","source":"model","category":"noun","syllables":["กล้อง","จุล","ทรรศน์","อิ","เล็ก","ตรอน"]}
+```
+
+Then submitted ปลา and ปลาดาว; the UI immediately identified the duplicate author and correct winner. Opened the review, proposed one chunk with an explicit question, received a model revision to ปลา / ดาว with a direct explanation, and confirmed it. The UI displayed ยืนยันเข้าฐานคำแล้ว and บันทึกแล้ว: ปลา / ดาว. QA corrections stayed on the QA branch, not the user's production dictionary.
+
+During the first browser pass, proposal changes remounted and collapsed the details element. Fixed the React key and dirty-form synchronization, rebuilt/restarted and repeated the browser request successfully with the form remaining open. Native AX clicking one button had no effect; the semantic Playwright locator activated it and the resulting request/answer/confirmation was verified.
+
+At 390×844, a read-only DOM geometry check returned `overflow=[]`, `scrollWidth=375`, `width=390` for the review fields, buttons and panels. Reset the viewport after testing. Browser error logs were empty. Screenshots in the conversation outputs: `word-review-model-response.png`, `word-review-confirmed.png`, `word-review-mobile.png`.
+
+## Limits and follow-up evidence
+
+One supplemental four-player HTTP competition run failed on a transient Neon `read ECONNRESET` while advancing a later phase. A full retry passed with five sets, challenge authorization, private votes, concurrent vote idempotency, human confirmation, elimination and cross-session score persistence:
+
+```json
+{"backend":"neon","sets":5,"challengeAuthorization":"PASS","votePrivacy":"PASS","concurrentVoteIdempotency":"PASS","humanConfirmation":"PASS","elimination":"PASS","scores":[{"name":"QA เซ็ต โฮสต์","score":0},{"name":"QA เซ็ต คน 1","score":5},{"name":"QA เซ็ต คน 2","score":7},{"name":"QA เซ็ต คน 3","score":15}],"savedAcrossSessions":"PASS","result":"PASS"}
+```
+
+Inspection of the supplemental server output also exposed unhandled pg idle-client error events. Added a sanitized pool error listener so idle resets cannot terminate the server or print client credentials; a deterministic regression covers it. Active-query network errors can still require a retry. The existing pg SSL-mode compatibility advisory is still emitted; this upgrade does not claim to resolve all network errors. Model reading/classification/title knowledge can still be incorrect; review and human confirmation are the correction mechanism.
+
+The new build was verified locally against real Neon and Gemini. Production Neon schema is ready, but no Vercel production URL was supplied or verified. Schema must precede the new frontend deployment. Existing Neon cleanup and one-hour room expiration were preserved and remain covered by deterministic tests.
+
+---
+
 # Verification — 2026-10-21
 
 This update verifies the room-expiry implementation in commit `383fbac` and documents the current word-analysis pipeline. The 2026-10-20 report below is historical; its database row counts and 36-test total are not current measurements.
