@@ -5,12 +5,13 @@ import { validateAnalysis, nounDecision } from './word-analysis.ts';
 import type { WordAnalysis } from './word-analysis.ts';
 export type Mode = 'shared' | 'online';
 export type Player = { id: string; name: string; tokenHash: string };
-export type Verification={status:'waiting_analysis'|'waiting_previous'|'valid'|'duplicate'|'not_noun'|'review'|'manual';repeated:string[];previousId:string|null;applied:boolean};
-export type Word = { id: string; phaseId?:string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; languageStatus?:'queued'|'analyzing'|'ready'|'uncertain'|'error'; analysisSource?:'database'|'model'; verification?:Verification; manual?: boolean; at: number };
-export type ResetEvent = { id: string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
+export type Verification={duplicateKind?:'word'|'syllable';status:'waiting_analysis'|'waiting_previous'|'valid'|'duplicate'|'not_noun'|'review'|'manual';repeated:string[];previousId:string|null;applied:boolean};
+export type Word = { id: string; playNumber?:number; phaseId?:string; text: string; playerId: string | null; previousId: string | null; syllables: string[] | null; check: 'pending' | 'valid' | 'error' | 'review'; analysis?:WordAnalysis; languageStatus?:'queued'|'analyzing'|'ready'|'uncertain'|'error'; analysisSource?:'database'|'model'; verification?:Verification; manual?: boolean; at: number };
+export type ResetEvent = { id: string; duplicateKind?:'word'|'syllable';turn?:number;previousTurn?:number;previousPlayerId?:string|null;previousPlayerName?:string;resumeId?:string; at: number; reason: 'duplicate' | 'human' | 'not_noun'; explanation?:string; suggestions?:string[]; word: string; wordId: string; previous: string; previousId: string; playerName: string; playerId: string; syllables: string[]; reusable: {text:string; playerName:string}[]; removed: Word[]; appealed?: boolean };
 export type Review = {id:string; wordId:string; playerId:string; analysis:WordAnalysis; model?:string; status?:'draft'|'checking'|'answered'|'error'|'confirming'|'approved'; requestId?:string; leaseUntil?:number; response?:{verdict:'agree'|'revise'|'uncertain';analysis:WordAnalysis;reason:string}; error?:string; approvedId?:string; approvedAnalysis?:WordAnalysis};
 export type RoundResult = {loserId:string;reason:'duplicate'|'not_noun'|'human'|'timeout'|'surrender'|'challenge';at:number};
 export type Game = {
+  setsPerRound?:3|5;
   continuation?:{at:number;starterId:string;anchorId:string;word:string;loserId:string}|null;
   releasedWords?:{text:string;playerName:string}[];
   competition?:Competition; challenge?:Challenge|null; archiveWords?:Word[];
@@ -40,14 +41,15 @@ export function validateSyllables(word:string, value:unknown):string[] {
   return value as string[];
 }
 export function duplicates(previous:string[], current:string[]) { return [...new Set(current.filter(s=>previous.includes(s)))]; }
-export function createGame(code:string,mode:Mode,names:string[],hostHash:string,seconds:number,now=Date.now()):Game {
+export function createGame(code:string,mode:Mode,names:string[],hostHash:string,seconds:number,now=Date.now(),setsPerRound:unknown=5):Game {
   if(!['shared','online'].includes(mode)) throw new Error('โหมดไม่ถูกต้อง');
   if(names.length<1||names.length>8||(mode==='shared'&&names.length<2)) throw new Error('เล่นเครื่องเดียวใช้ผู้เล่น 2–8 คน');
+  if(setsPerRound!==3&&setsPerRound!==5)throw new Error('จำนวนเซ็ตต่อรอบต้องเป็น 3 หรือ 5');
   const clean=names.map(validateName);
   if(new Set(clean).size!==clean.length) throw new Error('ชื่อผู้เล่นต้องไม่ซ้ำกัน');
   if(![0,15,30,45,60].includes(seconds)) throw new Error('เวลาต้องเป็น 15, 30, 45, 60 วินาที หรือปิดเวลา');
   const players=clean.map((name,i)=>({id:crypto.randomUUID(),name,tokenHash:i===0?hostHash:''}));
-  return {roundNumber:0,result:null,reviews:{},code,mode,status:'lobby',hostId:players[0].id,players,chain:[],events:[],roundId:crypto.randomUUID(),turnIndex:0,turnNumber:0,deadline:null,turnSeconds:seconds,manual:false,aiError:null,nextCheckAt:0,lease:null,processed:[],createdAt:now,notice:null};
+  return {setsPerRound,roundNumber:0,result:null,reviews:{},code,mode,status:'lobby',hostId:players[0].id,players,chain:[],events:[],roundId:crypto.randomUUID(),turnIndex:0,turnNumber:0,deadline:null,turnSeconds:seconds,manual:false,aiError:null,nextCheckAt:0,lease:null,processed:[],createdAt:now,notice:null};
 }
 function deadline(game:Game,now:number) { return game.turnSeconds ? now+game.turnSeconds*1000:null; }
 export function startRound(game:Game,seed:{text:string;syllables:string[]},now=Date.now()) {
@@ -56,13 +58,13 @@ export function startRound(game:Game,seed:{text:string;syllables:string[]},now=D
   prepareCompetition(game);
   if(sameSet)game.archiveWords=previous;
   game.roundNumber=game.competition!.round;game.result=null;game.challenge=null;game.continuation=null;game.releasedWords=[];
-  game.roundId=crypto.randomUUID(); game.chain=[{id:crypto.randomUUID(),text,playerId:null,previousId:null,syllables,check:'valid',at:now}];
+  game.roundId=crypto.randomUUID(); game.chain=[{id:crypto.randomUUID(),text,playNumber:0,playerId:null,previousId:null,syllables,check:'valid',at:now}];
   game.events=[]; game.turnIndex=nextActiveIndex(game,-1); game.turnNumber++; game.deadline=deadline(game,now); game.status='playing'; game.aiError=null;game.lease=null;game.nextCheckAt=0;game.notice=null;
 }
 export function advanceTimeout(game:Game,now=Date.now()):boolean {
   if(game.status!=='playing'||(game.challenge&&!['resolved','cancelled'].includes(game.challenge.phase))||game.deadline===null||now<game.deadline) return false;
   finishRound(game,game.players[game.turnIndex].id,'timeout',now);
-  game.notice=`${game.players[game.turnIndex].name} หมดเวลา — จบรอบ`;return true;
+  game.notice=`${game.players[game.turnIndex].name} หมดเวลา — ตกรอบจากเซ็ตนี้`;return true;
 }
 export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:number) {
   if(game.status!=='playing') throw new Error('รอให้เริ่มเกมก่อน');
@@ -75,18 +77,19 @@ export function assertTurn(game:Game,actorId:string,expectedTurn:number,now:numb
 export function submitWord(game:Game,actorId:string,input:unknown,now:number,expectedTurn:number):Word {
   assertTurn(game,actorId,expectedTurn,now);const text=validateWord(input);
   if(game.chain.length>=1000) throw new Error('ครบ 1,000 คำแล้ว ให้เจ้าของห้องจบรอบแล้วเริ่มรอบใหม่');
-  const word:Word={id:crypto.randomUUID(),phaseId:game.roundId,text,playerId:game.players[game.turnIndex].id,previousId:game.chain.at(-1)?.id??null,syllables:null,check:'pending',languageStatus:'queued',verification:{status:'waiting_analysis',repeated:[],previousId:game.chain.at(-1)?.id??null,applied:false},at:now};
-  game.chain.push(word);game.turnIndex=nextActiveIndex(game,game.turnIndex);game.turnNumber++;game.deadline=deadline(game,now);game.notice=null;return word;
+  const playNumber=Math.max(0,...roundWords(game).map((w,i)=>w.playNumber??(w.playerId?i:0)))+1;
+  const word:Word={id:crypto.randomUUID(),playNumber,phaseId:game.roundId,text,playerId:game.players[game.turnIndex].id,previousId:game.chain.at(-1)?.id??null,syllables:null,check:'pending',languageStatus:'queued',verification:{status:'waiting_analysis',repeated:[],previousId:game.chain.at(-1)?.id??null,applied:false},at:now};
+  game.chain.push(word);game.turnIndex=nextActiveIndex(game,game.turnIndex);game.turnNumber++;game.deadline=deadline(game,now);game.notice=null;evaluateWords(game,now);return word;
 }
 export function skipTurn(game:Game,actorId:string,now:number,expectedTurn:number) {
   assertTurn(game,actorId,expectedTurn,now);finishRound(game,game.players[game.turnIndex].id,'surrender',now);
 }
-export function rollback(game:Game,wordId:string,reason:'duplicate'|'human'|'not_noun',syllables:string[],now:number) {
+export function rollback(game:Game,wordId:string,reason:'duplicate'|'human'|'not_noun',syllables:string[],now:number,match?:Word) {
   const index=game.chain.findIndex(w=>w.id===wordId);if(index<1)return;
-  const word=game.chain[index];const prev=game.chain[index-1];
+  const word=game.chain[index];const neighbor=game.chain[index-1];const prev=match??neighbor;
   const name=(id:string|null)=>game.players.find(p=>p.id===id)?.name??'คำตั้งต้น';
   const removed=game.chain.splice(index);
-  game.events.push({id:crypto.randomUUID(),at:now,reason,word:word.text,wordId:word.id,previous:prev.text,previousId:prev.id,playerName:name(word.playerId),playerId:word.playerId!,syllables,explanation:reason==='not_noun'?word.analysis?.reason:undefined,suggestions:reason==='not_noun'?word.analysis?.suggestions:undefined,reusable:removed.slice(1).map(w=>({text:w.text,playerName:name(w.playerId)})),removed});
+  game.events.push({id:crypto.randomUUID(),at:now,reason,duplicateKind:reason==='duplicate'?(match?'word':'syllable'):undefined,turn:word.playNumber??index,previousTurn:prev.playNumber??game.chain.findIndex(w=>w.id===prev.id),previousPlayerId:prev.playerId,previousPlayerName:name(prev.playerId),resumeId:neighbor.id,word:word.text,wordId:word.id,previous:prev.text,previousId:prev.id,playerName:name(word.playerId),playerId:word.playerId!,syllables,explanation:reason==='not_noun'?word.analysis?.reason:undefined,suggestions:reason==='not_noun'?word.analysis?.suggestions:undefined,reusable:removed.slice(1).map(w=>({text:w.text,playerName:name(w.playerId)})),removed});
   finishRound(game,word.playerId!,reason,now);
   game.turnIndex=Math.max(0,game.players.findIndex(p=>p.id===word.playerId));game.turnNumber++;game.deadline=game.status==='playing'?deadline(game,now):null;game.notice=null;
 }
@@ -104,8 +107,11 @@ export function evaluateWords(game:Game,now:number){
   for(const current of words){
     if(!current.playerId)continue;
     const previous=byId.get(current.previousId??'');
+    const index=game.chain.findIndex(w=>w.id===current.id);
+    const exact=index>0?game.chain.slice(0,index).find(w=>normalize(w.text)===normalize(current.text)):current.verification?.duplicateKind==='word'?byId.get(current.verification.previousId??''):undefined;
     let status:Verification['status']='waiting_analysis',repeated:string[]=[];
     if(current.manual)status='manual';
+    else if(exact){status='duplicate';repeated=[current.text];}
     else if(current.analysis&&nounDecision(current.analysis)==='reject')status='not_noun';
     else if(current.analysis&&nounDecision(current.analysis)==='review'){status='review';if(previous?.syllables&&current.syllables)repeated=duplicates(previous.syllables,current.syllables);}
     else if(current.syllables){
@@ -115,9 +121,9 @@ export function evaluateWords(game:Game,now:number){
     current.languageStatus=current.analysis?(current.analysis.category==='uncertain'?'uncertain':'ready'):(current.languageStatus??'queued');
     const live=game.status==='playing'&&(!current.phaseId||current.phaseId===game.roundId)&&game.chain.some(w=>w.id===current.id);
     const applied=(current.verification?.applied===true&&current.verification.status===status)||(live&&!['waiting_analysis','waiting_previous','review'].includes(status));
-    current.verification={status,repeated,previousId:current.previousId,applied};
+    current.verification={status,repeated,previousId:exact?.id??current.previousId,applied,duplicateKind:status==='duplicate'?(exact?'word':'syllable'):undefined};
     current.check=status==='valid'||status==='manual'?'valid':status==='review'||(!live&&['duplicate','not_noun'].includes(status))?'review':current.languageStatus==='error'?'error':'pending';
-    if(live&&(status==='duplicate'||status==='not_noun'))rollback(game,current.id,status==='duplicate'?'duplicate':'not_noun',repeated,now);
+    if(live&&(status==='duplicate'||status==='not_noun'))rollback(game,current.id,status==='duplicate'?'duplicate':'not_noun',repeated,now,exact);
   }
 }
 export function resolveManually(game:Game,id:string,now:number,syllables?:string[]) {
@@ -128,7 +134,7 @@ export function resolveManually(game:Game,id:string,now:number,syllables?:string
 }
 export function appealReset(game:Game,eventId:string,now:number) {
   const event=game.events.find(e=>e.id===eventId);
-  if(!event||event.appealed||game.chain.at(-1)?.id!==event.previousId)throw new Error('รับรองย้อนหลังได้ก่อนส่งคำใหม่เท่านั้น');
+  if(!event||event.appealed||game.chain.at(-1)?.id!==(event.resumeId??event.previousId))throw new Error('รับรองย้อนหลังได้ก่อนส่งคำใหม่เท่านั้น');
   const word={...event.removed[0],manual:true,check:'valid' as const};
   game.chain.push(word);event.appealed=true;game.turnIndex=(game.players.findIndex(p=>p.id===word.playerId)+1)%game.players.length;game.turnNumber++;game.deadline=game.status==='playing'?deadline(game,now):null;
   // Descendants stay reset; an appeal only restores the disputed word.
@@ -145,7 +151,7 @@ export function publicGame(game:Game,revision:number,youId:string,now=Date.now()
 }
 export type PublicGame = ReturnType<typeof publicGame>;
 
-export function needsAnalysis(word:Word) { return (!word.analysis && !word.manual && Boolean(word.playerId)) || (!word.syllables && !word.analysis); }
+export function needsAnalysis(word:Word) { return word.verification?.duplicateKind!=='word'&&((!word.analysis && !word.manual && Boolean(word.playerId)) || (!word.syllables && !word.analysis)); }
 export function analysisCandidates(game:Game):Word[]{
   if(game.continuation)return [];
   const live=game.chain.filter(w=>(!w.phaseId||w.phaseId===game.roundId)&&needsAnalysis(w));

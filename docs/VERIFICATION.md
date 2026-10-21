@@ -1,3 +1,24 @@
+# Selectable round length and exact-word history check — 2026-10-21
+
+Current change: choose 3 or 5 separate sets per round at room creation. The server rejects other values; existing rooms default to five. Each set clears its live word/reset/review history, returns all players and starts a fresh seed. Set scores aggregate into round scores, then round points reset when the next round starts; room totals persist. The final board displays the round winner or tied winners.
+
+A synchronous whole-word check compares the new normalized spelling against the entire live chain in this set, including the opening and pending words. It excludes removed/reset words and previous sets. A match eliminates immediately and records original word ID, original speaker, original turn and current turn. Exact duplicates do not wait for or request another language analysis. Adjacent written-syllable checks and differently spelled homophones retain their rules. Evidence appears in notices, reset history and the five-second countdown without disclosing the full chain.
+
+Changed files: lib/game.ts, competition.ts, rooms.ts, verification-label.ts; home, board, countdown and rules/footer UI; package scripts; tests/rounds-duplicates.test.mjs; scripts/smoke-rounds-duplicates.mjs; README and word-checking documentation. No schema, env or production dictionary changes.
+
+Validation was deliberately limited to related functionality per the user request:
+
+- npm run test:rounds: 19 passed, 0 failed (11 new tests plus 8 continuation/word/score regressions).
+- Three selected pipeline regressions passed: immediate cached noun checks without a key/during cooldown, dependent neighbor recheck, and cache progress during an in-flight model request. No full-suite run for this change.
+- npm run build passed compilation, TypeScript and all six pages.
+- Real HTTP on the isolated Neon QA branch: shared-device 3 sets and online 5 sets, each repeating เหล็ก → แมว → เหล็ก. All eight sets detected the exact duplicate immediately with speaker and turn-1 evidence. Fresh set histories accepted เหล็ก again; final round scores were [3,9] and [5,15]. Round 2 restarted at set 1 with previous round summaries preserved. The smoke script requested zero model calls (manual language checking); SQL unit cases separately cover cached automatic language checking.
+
+Browser QA also completed all three sets through the actual UI: selected 3 sets, repeated เหล็ก → แมว → เหล็ก in each set, observed the immediate original-speaker/turn-1 notice, accepted the first เหล็ก again after each new-set reset, and saw the final round winner with [3,9] points and the new-round (3 sets) control. Screenshots: round-set-selector.png and three-set-round-duplicate-result.png in the task outputs.
+
+Test fixtures initially mixed the fake service clock with a real SQL-store clock and allowed the random seed to equal the first submitted word; fixtures were corrected to use the same clock and deterministic opening. All final targeted checks pass. The unchanged pg SSL-mode future-compatibility advisory remains. Vercel production deployment has not been verified.
+
+---
+
 # Automatic set continuation and database openings — 2026-10-21
 
 Latest change: after an elimination with multiple survivors, a server-timed five-second overlay announces the next survivor and retains the last usable word. Any authenticated reader can advance it, with CAS preventing double starts. Old-phase results cannot eliminate again; pending tails are archived and released. Set winners still end their set. Initial nouns come from the dictionary, without a model call. No schema or environment-file changes.

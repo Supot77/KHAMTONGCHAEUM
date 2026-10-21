@@ -21,7 +21,7 @@ export interface RoomStore {
   cached(model:string,words:string[]):Promise<Record<string,string[]>>;
   cache(model:string,entries:Record<string,string[]>):Promise<void>;
 }
-export type Command={action:string;code?:string;token?:string;commandId?:string;name?:unknown;names?:unknown;mode?:unknown;seconds?:unknown;text?:unknown;turn?:unknown;wordId?:unknown;eventId?:unknown;manual?:unknown;syllables?:unknown;analysis?:unknown;proposalId?:unknown;actorId?:unknown;reason?:unknown;finish?:unknown;connected?:unknown;challengeId?:unknown;useModel?:unknown};
+export type Command={action:string;code?:string;token?:string;commandId?:string;name?:unknown;names?:unknown;mode?:unknown;seconds?:unknown;setsPerRound?:unknown;text?:unknown;turn?:unknown;wordId?:unknown;eventId?:unknown;manual?:unknown;syllables?:unknown;analysis?:unknown;proposalId?:unknown;actorId?:unknown;reason?:unknown;finish?:unknown;connected?:unknown;challengeId?:unknown;useModel?:unknown};
 export async function tokenHash(token:unknown):Promise<string> {
   if(typeof token!=='string'||token.length<32||token.length>160)throw new Error('เซสชันไม่ถูกต้อง กรุณาเข้าห้องอีกครั้ง');
   const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));
@@ -46,7 +46,7 @@ export class RoomService {
       if(names.some(n=>typeof n!=='string'))throw new Error('กรุณาใส่ชื่อผู้เล่น');
       for(let i=0;i<8;i++){
         const alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';const bytes=crypto.getRandomValues(new Uint8Array(6));const code=Array.from(bytes,b=>alphabet[b%alphabet.length]).join('');
-        const game=createGame(code,command.mode==='shared'?'shared':'online',names as string[],hash,typeof command.seconds==='number'?command.seconds:30,now);
+        const game=createGame(code,command.mode==='shared'?'shared':'online',names as string[],hash,typeof command.seconds==='number'?command.seconds:30,now,command.setsPerRound===undefined?5:command.setsPerRound);
         if(await this.store.insert(game))return publicGame(game,0,game.hostId,now);
       }
       throw new Error('สร้างรหัสห้องไม่ได้ กรุณาลองอีกครั้ง');

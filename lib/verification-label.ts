@@ -3,7 +3,7 @@ export function verificationLabel(word:Word|undefined):string{
   if(!word)return 'รอตรวจ';
   if(word.manual)return 'ผู้เล่นรับรอง';
   const status=word.verification?.status;
-  if(status==='duplicate')return 'พบพยางค์ซ้ำ';
+  if(status==='duplicate')return word.verification?.duplicateKind==='word'?'พบคำเต็มซ้ำ':'พบพยางค์ซ้ำ';
   if(status==='not_noun')return 'ไม่ใช่คำนาม';
   if(status==='waiting_previous')return 'ได้ผลแล้ว · รอข้อมูลคำก่อนหน้า';
   if(status==='review'||word.check==='review')return 'ยังไม่แน่ใจ · รอทบทวน';

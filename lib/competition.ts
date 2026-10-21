@@ -22,7 +22,7 @@ export function prepareCompetition(game:Game){
   }
   const c=game.competition;
   if(c.setComplete){
-    if(c.set===5){c.history.push({round:c.round,points:{...c.roundPoints},sets:structuredClone(c.completedSets)});c.round++;c.set=1;c.roundPoints={};c.completedSets=[];}
+    if(c.set===(game.setsPerRound??5)){c.history.push({round:c.round,points:{...c.roundPoints},sets:structuredClone(c.completedSets)});c.round++;c.set=1;c.roundPoints={};c.completedSets=[];}
     else c.set++;
     c.activeIds=game.players.map(p=>p.id);c.eliminated=[];c.setPoints={};c.finalistsAwarded=false;c.setComplete=false;c.winnerId=null;
     game.archiveWords=[];game.reviews={};finalists(game);
