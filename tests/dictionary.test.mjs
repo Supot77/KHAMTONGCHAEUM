@@ -17,7 +17,7 @@ async function fixture(){
  await store.saveAnalyses('old',{'กรุงเทพมหานคร':noun(['กรุงเทพ','มหานคร'],{nounType:'proper'}),'มหาสมุทร':noun(['มหา','สมุทร']),'มหาสมุด':noun(['ม','หา','ส','มุด'])});
  const service=new RoomService(store,{configured:false,model:'unused'},()=>now),tokens=Array.from({length:3},()=>crypto.randomUUID()+crypto.randomUUID());let code;
  const cmd=(i,action,extra={})=>service.command({code,token:tokens[i],action,commandId:crypto.randomUUID(),...extra});let room=await cmd(0,'create',{mode:'online',name:'เจ้าของ',seconds:0});code=room.code;await cmd(1,'join',{name:'ผู้เล่น'});
- const api=(i,action,extra={})=>dictionaryCommand(store,{code,token:tokens[i],action,...extra});
+ const api=(i,action,extra={},provider)=>dictionaryCommand(store,{code,token:tokens[i],action,...extra},provider);
  const get=async word=>(await api(1,'list',{query:word})).items.find(x=>x.word===word);
  const edit=(entry,extra={})=>({originalWord:entry.word,word:entry.word,analysis:entry.analysis,expectedUpdatedAt:entry.updatedAt,...extra});
  return {db,store,service,cmd,api,get,edit,time:x=>now=x};
@@ -66,4 +66,66 @@ test('model analyze and player review receive fine Thai reading examples while r
  const requests=[];const provider=createProvider('test-key','test-model',async(url,options)=>{const request=JSON.parse(options.body);requests.push(request);const input=JSON.parse(request.contents[0].parts[0].text);const result=input.proposal?{verdict:'agree',analysis:input.proposal,reason:'ตรงการอ่าน'}:{items:[{word:'กรุงเทพมหานคร',...noun(fine,{nounType:'proper'})},{word:'มหาสมุทร',...noun(ocean)}]};return Response.json({candidates:[{content:{parts:[{text:JSON.stringify(result)}]}}]});});
  const result=await provider.analyze(['กรุงเทพมหานคร','มหาสมุทร']);assert.deepEqual(result['กรุงเทพมหานคร'].syllables,fine);assert.deepEqual(result['มหาสมุทร'].syllables,ocean);await provider.reviewAnalysis({word:'มหาสมุทร',original:null,proposal:noun(ocean)});
  for(const req of requests){const text=req.systemInstruction.parts[0].text;assert.ok(text.includes('["กรุง","เทพ","ม","หา","น","คร"]'));assert.ok(text.includes('["ม","หา","ส","มุทร"]'));assert.ok(text.includes('ห้ามเติม มะ นะ สะ'));assert.ok(text.includes('ชื่อเพลง ภาพยนตร์ ซีรีส์'));assert.ok(text.includes('สีต้องมีคำว่า สี'));}
+});
+
+test('all dictionary rows remain browseable despite invalid spelling, malformed JSON or incomplete metadata',async()=>{
+ const f=await fixture();
+ const raw=JSON.stringify(noun(['มะ','หา','สะ','หมุด']));f.db.prepare('UPDATE word_dictionary SET analysis=? WHERE word=?').run(raw,'มหาสมุทร');
+ f.db.prepare('UPDATE word_dictionary SET analysis=? WHERE word=?').run('{broken','มหาสมุด');
+ f.db.prepare('UPDATE word_dictionary SET analysis=? WHERE word=?').run(JSON.stringify({syllables:['กรุงเทพ','มหานคร']}),'กรุงเทพมหานคร');
+ const page=await f.api(1,'list');assert.equal(page.items.length,3);assert.equal(page.total,3);assert.ok(page.items.every(x=>x.validationError));
+ const entry=await f.get('มหาสมุทร');assert.deepEqual(entry.analysis.syllables,['มะ','หา','สะ','หมุด']);
+ assert.equal((await f.get('มหาสมุด')).analysis.category,'uncertain');
+ assert.equal(f.db.prepare('SELECT analysis FROM word_dictionary WHERE word=?').get(entry.word).analysis,raw,'reading must not normalize stored facts');
+ // Game lookups retain strict validation until a person actually repairs the entry.
+ await assert.rejects(()=>f.store.analyses('any',[entry.word]),/รูปเขียน/);
+ const fixed=await f.api(1,'save',f.edit(entry,{analysis:noun(ocean)}));assert.equal(fixed.entry.validationError,null);
+ assert.deepEqual((await f.store.analyses('any',[entry.word]))[entry.word].syllables,ocean);
+ assert.equal(f.db.prepare("SELECT analysis FROM word_analysis_history WHERE word=? AND metadata LIKE '%before%'").get(entry.word).analysis,raw);
+ f.db.close();
+});
+
+test('a malformed old spelling can be corrected while retaining original raw audit data',async()=>{
+ const f=await fixture();f.db.prepare('UPDATE word_dictionary SET analysis=? WHERE word=?').run('null','มหาสมุด');
+ const entry=await f.get('มหาสมุด');await f.api(1,'save',f.edit(entry,{word:'มหาสมุทรใหม่',analysis:noun([...ocean,'ใหม่'])}));
+ const old=await f.get(entry.word);assert.equal(old.analysis.category,'other');assert.equal(old.validationError,null);assert.deepEqual(old.analysis.suggestions,['มหาสมุทรใหม่']);
+ assert.equal(f.db.prepare("SELECT analysis FROM word_analysis_history WHERE word=? AND metadata LIKE '%before%'").get(entry.word).analysis,'null');f.db.close();
+});
+
+test('AI review accepts a broken draft, waits explicitly and never persists its answer without save',async()=>{
+ const f=await fixture(),entry=await f.get('มหาสมุทร');let resolve,called=false,captured;
+ const waiting=new Promise(r=>resolve=r),provider={configured:true,model:'test-ai',reviewAnalysis:async input=>{called=true;captured=input;return waiting;}};
+ const history=f.db.prepare('SELECT count(*) n FROM word_analysis_history').get().n;
+ const pending=f.api(1,'analyze',{...f.edit(entry),analysis:noun(['มะ','หา','สะ','หมุด']),request:'ห้ามเติมสระที่ไม่มีในคำเดิม'},provider);
+ for(let i=0;i<100&&!called;i++)await new Promise(r=>setTimeout(r,1));assert.equal(called,true);
+ assert.deepEqual(captured.proposal.syllables,['มะ','หา','สะ','หมุด']);assert.equal(captured.request,'ห้ามเติมสระที่ไม่มีในคำเดิม');
+ assert.deepEqual(await f.get(entry.word),entry);assert.equal(f.db.prepare('SELECT count(*) n FROM word_analysis_history').get().n,history);
+ resolve({verdict:'revise',analysis:noun(ocean),reason:'แบ่งใหม่โดยรักษารูปสะกดเดิม'});
+ const result=await pending;assert.deepEqual(result.analysis.syllables,ocean);assert.equal(result.model,'test-ai');
+ assert.deepEqual(await f.get(entry.word),entry);await f.api(1,'save',f.edit(entry,{analysis:result.analysis}));
+ assert.deepEqual((await f.get(entry.word)).analysis.syllables,ocean);f.db.close();
+});
+
+test('AI review can repair malformed stored facts and requests use the edited word',async()=>{
+ const f=await fixture();f.db.prepare('UPDATE word_dictionary SET analysis=? WHERE word=?').run('{bad','มหาสมุด');const entry=await f.get('มหาสมุด');let captured;
+ const provider={configured:true,model:'test-ai',reviewAnalysis:async input=>{captured=input;return {verdict:'revise',analysis:noun(ocean),reason:'ตรวจคำสะกดใหม่'};}};
+ const result=await f.api(1,'analyze',f.edit(entry,{word:'มหาสมุทร',analysis:noun([],{reason:''})}),provider);
+ assert.equal(captured.word,'มหาสมุทร');assert.equal(captured.original,null);assert.deepEqual(result.analysis.syllables,ocean);assert.ok((await f.get(entry.word)).validationError);f.db.close();
+});
+
+test('AI failures, bad answers, stale versions and absent membership cannot write or replace a draft',async()=>{
+ const f=await fixture(),entry=await f.get('มหาสมุทร');let calls=0;
+ const provider={configured:true,model:'test-ai',reviewAnalysis:async()=>{calls++;throw new Error('AI offline');}};
+ await assert.rejects(()=>f.api(2,'analyze',f.edit(entry),provider),RoomUnavailableError);assert.equal(calls,0);
+ await assert.rejects(()=>f.api(1,'analyze',f.edit(entry,{expectedUpdatedAt:0}),provider),/เปลี่ยนแล้ว/);assert.equal(calls,0);
+ await assert.rejects(()=>f.api(1,'analyze',f.edit(entry,{request:'a'.repeat(501)}),provider),/500/);assert.equal(calls,0);
+ await assert.rejects(()=>f.api(1,'analyze',f.edit(entry),provider),/offline/);
+ provider.reviewAnalysis=async()=>({verdict:'revise',analysis:noun(['มะ','หา','สะ','หมุด']),reason:'ผิด'});
+ await assert.rejects(()=>f.api(1,'analyze',f.edit(entry),provider),/รูปเขียน/);assert.deepEqual(await f.get(entry.word),entry);f.db.close();
+});
+
+test('departed members cannot receive an in-flight AI response',async()=>{
+ const f=await fixture(),entry=await f.get('มหาสมุทร');
+ const provider={configured:true,model:'test-ai',reviewAnalysis:async()=>{await f.cmd(1,'leave');return {verdict:'revise',analysis:noun(ocean),reason:'ตรวจแล้ว'};}};
+ await assert.rejects(()=>f.api(1,'analyze',f.edit(entry),provider),RoomUnavailableError);assert.deepEqual((await f.store.getDictionary(entry.word)).analysis,entry.analysis);f.db.close();
 });

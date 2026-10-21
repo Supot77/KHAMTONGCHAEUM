@@ -1,3 +1,13 @@
+# Dictionary invalid-row recovery and explicit AI edit review — 2026-10-21
+
+Fixed the list-wide failure caused by strict validation of a single historical row. lib/dictionary.ts now projects invalid rows for display with validationError, retains original facts on read, provides exact lookup for review, includes matching total counts, and supports audited repairs/renames of malformed rows. Gameplay and save validation remain strict. lib/dictionary-service.ts and app/api/dictionary/route.ts add authenticated, version-checked, no-write AI review; lib/gemini.ts accepts an optional player request as review data. app/components/dictionary-page.tsx and app/globals.css show review flags/counts and the wait → AI answer → copy into draft → explicit save interaction. No schema/env/provider changes or production dictionary writes.
+
+Related tests only: `node --experimental-strip-types --test tests/dictionary.test.mjs tests/pipeline.test.mjs tests/partial-analysis.test.mjs` passed 40/40. Dictionary tests include malformed JSON/metadata/segments, full-list visibility, strict game reads, raw audit preservation, invalid spelling repairs, delayed/no-write model responses, edited words, errors, stale versions and departed members. `npm run build` compiled successfully, passed TypeScript and generated 8 pages. No full-suite run.
+
+Live browser/HTTP/Postgres/Gemini verification used the isolated Neon QA branch at localhost:5174. A backed-up QA word, มหาสมุทร, was temporarily given invalid segments มะ / หา / สะ / หมุด. The browser loaded all 140/140 dictionary entries, including the flagged word. Its draft and explicit Thai request reached Gemini 3.5 Flash-Lite; the UI displayed a waiting state, then verdict revise and ม / หา / ส / มุทร. Direct SQL reads confirmed the old invalid data remained unchanged both after the model response and after copying the result into the form. Only clicking Save changed the row to the valid segmentation with source players. Mobile viewport 390px had document width 375px and no horizontal overflow. Screenshots: dictionary-ai-review.png and dictionary-ai-editor-mobile.png in this task's outputs. QA fixture was restored and the test room/server cleaned up. Production deployment not verified.
+
+---
+
 # Partial word results and dictionary reading layout — 2026-10-21
 
 Changed lib/gemini.ts, lib/rooms.ts, app/components/dictionary-page.tsx, app/globals.css, tests/partial-analysis.test.mjs, package.json and relevant docs. Valid model results now survive invalid peers, only unresolved spellings are retried after a 15-second cooldown, and shared dictionary entries open in a readable search/index/detail view with an explicit edit action. No schema, environment, provider choice or production dictionary data changed.

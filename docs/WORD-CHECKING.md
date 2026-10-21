@@ -148,3 +148,12 @@ Room checks re-read authoritative dictionary facts after saving, apply all succe
 The dictionary page uses a search-first layout: result index, headword, category, written-syllable breakdown, classification explanation, source and update date. Editing is explicitly opened/closed. The explanation is the stored analysis reason, not an invented definition or imported dictionary text. Existing member authentication, audit and version-conflict handling are unchanged.
 
 Layout reference: [Longdo dictionary search](https://dict.longdo.com/search/พจนานุกรม), inspected 2026-10-21 through publicly retrieved page structure (search, headword, category and grouped explanations). Cambridge's English–Thai page was found but direct fetching returned 403; no claims about its detailed layout are made. The UI keeps the game's own branding and does not reuse third-party logos or entries.
+
+
+## Dictionary repair and explicit AI review (2026-10-21)
+
+Dictionary browsing is now tolerant of historical invalid data. Each row carries validationError; valid rows retain their normal analysis, while malformed JSON, incomplete metadata and incorrect written segments get a bounded display projection and a review warning. Browsing never repairs or rewrites stored data. All rows remain searchable/paginated, with an exact total count. Gameplay lookups, final saves and model responses still use strict validateAnalysis.
+
+The editor can submit an explicit `analyze` request containing the edited word, draft segments/category and an optional 500-character player request. Current room membership and the original entry version are checked before calling the configured provider's reviewAnalysis. Incorrect or empty draft segmentation can be sent as review data; the result must preserve the edited word's exact written spelling. A missing title context is sent as an explicit request to verify the work rather than a claimed attribution. Membership is checked again after the model responds. No dictionary/history write occurs during analysis.
+
+The UI visibly waits (55-second client timeout, 45-second provider timeout, 60-second route budget), shows the returned verdict, explanation, syllables and model, and requires a separate action to copy the proposal into the form. Only Save writes to word_dictionary using the existing version guard, membership transaction and audit trail. Model errors preserve the draft; stale or departed sessions cannot save. This is an opt-in per-word reanalysis and does not change the normal cache-first game pipeline or model selection.
