@@ -34,8 +34,19 @@ test('invalid phonetic/spelling fragments cannot corrupt a word or create histor
  await assert.rejects(()=>f.api(1,'save',f.edit(entry,{analysis:noun(['มะ','หา','สะ','หมุด'])})),/รูปเขียน/);assert.deepEqual(await f.get(entry.word),entry);assert.equal(f.db.prepare('SELECT count(*) n FROM word_analysis_history').get().n,before);f.db.close();
 });
 
-test('outsiders, departed members and expired rooms cannot read or edit the shared dictionary',async()=>{
- const f=await fixture(),entry=await f.get('มหาสมุทร');await assert.rejects(()=>f.api(2,'list'),RoomUnavailableError);await assert.rejects(()=>f.api(2,'save',f.edit(entry)),RoomUnavailableError);await f.cmd(1,'leave');await assert.rejects(()=>f.api(1,'save',f.edit(entry)),RoomUnavailableError);f.time(3601001);await assert.rejects(()=>f.api(0,'list'),RoomUnavailableError);f.db.close();
+test('public browsing works without a room, including departed and expired sessions; editing stays protected',async()=>{
+ const f=await fixture(),entry=await f.get('มหาสมุทร');
+ const publicPage=await dictionaryCommand(f.store,{action:'list',query:'มหาสมุทร'});assert.equal(publicPage.total,1);assert.equal(publicPage.items[0].word,entry.word);
+ assert.equal((await f.api(2,'list')).total,3);await assert.rejects(()=>f.api(2,'save',f.edit(entry)),RoomUnavailableError);
+ await f.cmd(1,'leave');assert.equal((await f.api(1,'list')).total,3);await assert.rejects(()=>f.api(1,'save',f.edit(entry)),RoomUnavailableError);
+ f.time(3601001);assert.equal((await f.api(0,'list')).total,3);await assert.rejects(()=>f.api(0,'save',f.edit(entry)),RoomUnavailableError);
+ for(const action of ['save','analyze'])await assert.rejects(()=>dictionaryCommand(f.store,{action,...f.edit(entry)}));f.db.close();
+});
+
+test('public index ignores stale credentials and never reads rooms or invokes the model',async()=>{
+ let modelCalls=0;const store={listDictionary:async(query,after)=>({items:[],nextCursor:null,total:0,query,after}),read:async()=>{throw Error('public browsing must not inspect a room');}};
+ const result=await dictionaryCommand(store,{action:'list',query:'แมว',after:'คำ',token:'invalid',code:'expired'},{configured:true,model:'test',reviewAnalysis:async()=>{modelCalls++;}});
+ assert.equal(result.query,'แมว');assert.equal(result.after,'คำ');assert.equal(modelCalls,0);
 });
 
 test('membership is checked again inside the transaction if the editor leaves after API authentication',async()=>{

@@ -7,11 +7,12 @@ import type {LanguageProvider} from './gemini.ts';
 import type {WordAnalysis} from './word-analysis.ts';
 export type DictionaryRequest={action?:unknown;code?:unknown;token?:unknown;query?:unknown;after?:unknown;originalWord?:unknown;word?:unknown;analysis?:unknown;expectedUpdatedAt?:unknown;request?:unknown};
 export async function dictionaryCommand(store:RoomStore,input:DictionaryRequest,provider?:Pick<LanguageProvider,'configured'|'model'|'reviewAnalysis'>){
+ // The shared word index is public. Editing and model calls still require membership.
+ if(input.action==='list')return store.listDictionary(String(input.query??''),String(input.after??''));
  const hash=await tokenHash(input.token),code=String(input.code??'').toUpperCase();
  if(!/^[A-Z2-9]{6}$/.test(code))throw new Error('เข้าห้องก่อนเปิดพจนานุกรม');
  const row=await store.read(code),player=row?.game.players.find(p=>p.tokenHash===hash);
  if(!row||!player)throw new RoomUnavailableError('คุณไม่ได้อยู่ในห้องนี้แล้ว กรุณาเข้าห้องอีกครั้ง');
- if(input.action==='list')return store.listDictionary(String(input.query??''),String(input.after??''));
  if(input.action==='analyze'){
   if(!provider?.configured)throw new Error('ยังไม่ได้ตั้งค่าโมเดลที่เซิร์ฟเวอร์');
   const word=validateWord(input.word),originalWord=validateWord(input.originalWord),old=await store.getDictionary(originalWord);

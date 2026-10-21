@@ -1,3 +1,13 @@
+# Public dictionary reading without room membership — 2026-10-21
+
+Changed lib/dictionary-service.ts to serve list/search before authentication; app/components/dictionary-page.tsx now loads independently of sessions and gates only edit/AI controls. tests/dictionary.test.mjs now distinguishes public reading from protected mutations. No schema, credentials, model selection or production data changed.
+
+Related tests only: `node --experimental-strip-types --test tests/dictionary.test.mjs` passed 17/17. New coverage confirms anonymous and stale/expired/departed-session reads, zero room reads/model calls for public listing, and continued rejection of anonymous save/AI operations. Existing dictionary repair/audit/version/review cases also pass. `npm run build` compiled, passed TypeScript and generated 8 pages. No full-suite run.
+
+Live HTTP against localhost:5174 with the isolated QA database: anonymous list 200, stale-session list 200, anonymous save 400, anonymous analyze 400; zero model calls and dictionary writes. Browser direct navigation to /dictionary without joining a room displayed the public search/index/details and entry-room link without an edit button. Screenshot: dictionary-public.png in this task's outputs. Production deployment not verified.
+
+---
+
 # Dictionary invalid-row recovery and explicit AI edit review — 2026-10-21
 
 Fixed the list-wide failure caused by strict validation of a single historical row. lib/dictionary.ts now projects invalid rows for display with validationError, retains original facts on read, provides exact lookup for review, includes matching total counts, and supports audited repairs/renames of malformed rows. Gameplay and save validation remain strict. lib/dictionary-service.ts and app/api/dictionary/route.ts add authenticated, version-checked, no-write AI review; lib/gemini.ts accepts an optional player request as review data. app/components/dictionary-page.tsx and app/globals.css show review flags/counts and the wait → AI answer → copy into draft → explicit save interaction. No schema/env/provider changes or production dictionary writes.

@@ -157,3 +157,10 @@ Dictionary browsing is now tolerant of historical invalid data. Each row carries
 The editor can submit an explicit `analyze` request containing the edited word, draft segments/category and an optional 500-character player request. Current room membership and the original entry version are checked before calling the configured provider's reviewAnalysis. Incorrect or empty draft segmentation can be sent as review data; the result must preserve the edited word's exact written spelling. A missing title context is sent as an explicit request to verify the work rather than a claimed attribution. Membership is checked again after the model responds. No dictionary/history write occurs during analysis.
 
 The UI visibly waits (55-second client timeout, 45-second provider timeout, 60-second route budget), shows the returned verdict, explanation, syllables and model, and requires a separate action to copy the proposal into the form. Only Save writes to word_dictionary using the existing version guard, membership transaction and audit trail. Model errors preserve the draft; stale or departed sessions cannot save. This is an opt-in per-word reanalysis and does not change the normal cache-first game pipeline or model selection.
+
+
+## Public dictionary reading (2026-10-21)
+
+The list action is public: search, pagination, totals and entry details work without a room or session, and expired/stale room credentials do not block reading. The public path performs no room lookup, model call, dictionary write or room heartbeat. It returns the same dictionary view, including review warnings, without room or audit records.
+
+The page loads the word index independently of session restoration. Current membership controls the editor affordance; visitors see a link to enter a room for editing/AI help. Save and analyze still pass through server-side membership checks, and the existing save transaction recheck/version guard remains in place. Reading does not grant editing privileges.
